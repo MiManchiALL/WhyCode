@@ -14,12 +14,13 @@ import type { SshReleaseOptions } from '../../shared/ssh-skills.ts'
 import { cleanManagedSkills } from './skill-remote.ts'
 import { remoteSkillIO } from './skill-files.ts'
 
-interface ConnectedHost {
+export interface ConnectedHost {
   client: Client
   io: WorkspaceIO
   home: string
   target: string
   component: RemoteComponent
+  executable: string
   processes: RemoteProcessHost
 }
 interface AuthenticatedHost { client: Client; fs: WorkspaceFileSystem; home: string; target: string }
@@ -172,7 +173,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
         spawn: (command, cwd) => processes.spawn(command, cwd),
         ripgrep: (args, cwd) => processes.spawn({ executable: installed.ripgrep, args }, cwd),
       }
-      const host: ConnectedHost = { client, io, home, target, processes, component }
+      const host: ConnectedHost = { client, io, home, target, processes, component, executable: installed.executable }
       const active: ConnectionState = { status: 'connected', host }
       this.states.set(id, active)
       this.emit('changed')

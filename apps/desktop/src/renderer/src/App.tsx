@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -8,6 +9,7 @@ import {
   type CSSProperties,
 } from 'react'
 import { MessageCircleQuestionMark } from 'lucide-react'
+import { ForkProgressDialog } from './session-loading.tsx'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -194,7 +196,8 @@ export function App() {
   const [status, setStatus] = useState<AgentStatus>('idle')
   const [workStartedAt, setWorkStartedAt] = useState<number | null>(null)
   const [stopping, setStopping] = useState(false)
-  const [sessionTransitionPending, setSessionTransitionPending] = useState(false)
+  const [sessionTransition, setSessionTransition] = useState<'workspace' | 'fork' | null>(null)
+  const sessionTransitionPending = sessionTransition !== null
   const [questionInput] = useState(() => new ComposerValue<QuestionDraft | undefined>(undefined))
   const questionCollapsed = useSyncExternalStore(questionInput.subscribe, () => Boolean(questionInput.getSnapshot()?.collapsed))
   const [composerSubmissions] = useState(() => new ComposerSubmissions())
@@ -251,7 +254,6 @@ export function App() {
   const [conversationFeedback, setConversationFeedback] =
     useState<ConversationFeedback | null>(null)
   const [forkOrigin, setForkOrigin] = useState<SessionForkOrigin | null>(null)
-  const [forkPendingTurnId, setForkPendingTurnId] = useState<string | null>(null)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
@@ -297,10 +299,19 @@ export function App() {
     ? rightPanelSessionStoreRef.current.get(resumingSessionId)
     : committedRightPanelState
   const panelFullscreen = rightPanelFullscreen && rightPanelState.open
-  /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
-  const stickToBottom = useRef(true)
+  // 记录上次跟随的底部坐标，区分正文重新排版和同一布局内的滚动。null 表示正在阅读正文。
+  const followedBottom = useRef<number | null>(0)
+  const scrollToEnd = useCallback(() => {
+    const scroller = scrollRef.current
+    if (!scroller) return
+    followedBottom.current = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+    scroller.scrollTop = followedBottom.current
+  }, [])
   const [showJumpBottom, setShowJumpBottom] = useState(false)
-  const recentlyScrolledAway = useScrollIntent(scrollRef, () => { stickToBottom.current = false }, !loadingConversation)
+  const recentlyScrolledAway = useScrollIntent(scrollRef, () => {
+    followedBottom.current = null
+    pendingScrollRestoreRef.current = null
+  }, !loadingConversation)
   const btwModeRef = useRef<BtwMode | null>(null)
   const slashCommandRef = useRef<(command: ComposerCommandId) => void>(() => {})
   const conversationEventBufferRef = useRef<ConversationEventBuffer | null>(null)
@@ -348,7 +359,7 @@ export function App() {
     const navigation = scrollConversationToTarget(scroller, targetId, alignment)
     if (!navigation) return false
     conversationScrollReleaseRef.current = navigation.release
-    stickToBottom.current = false
+    followedBottom.current = null
     setShowJumpBottom(true)
     return true
   }, [releaseConversationScroll])
@@ -407,7 +418,7 @@ export function App() {
       && status !== 'error',
     forkAvailable: latestForkTurnId !== null
       && (status === 'idle' || status === 'error'),
-    forkDisabled: sessionTransitionPending || forkPendingTurnId !== null,
+    forkDisabled: sessionTransitionPending,
     btwAvailable: latestForkTurnId !== null && (status === 'idle' || status === 'error'),
     bbtwAvailable: latestForkTurnId !== null
       && view.btwContinuation !== null
@@ -608,7 +619,7 @@ export function App() {
     const key = composerKey(currentRuntimeId, sessionIdRef.current)
     conversationPresentationsRef.current.saveScroll(
       key,
-      stickToBottom.current
+      followedBottom.current !== null
         ? { atBottom: true, scrollTop: 0 }
         : captureConversationScrollPosition(scrollElement),
       scrollElement.querySelector<HTMLElement>('[data-conversation-scroll-block]')?.dataset.conversationScrollBlock,
@@ -627,20 +638,20 @@ export function App() {
     setDeletingSessionIds(next)
   }, [])
 
-  const beginSessionTransition = useCallback(() => {
+  const beginSessionTransition = useCallback((kind: 'workspace' | 'fork' = 'workspace') => {
     if (sessionTransitionPendingRef.current) return false
     history.cancel()
     let finish!: () => void
     const promise = new Promise<void>(resolve => { finish = resolve })
     sessionTransitionPendingRef.current = { promise, finish }
-    setSessionTransitionPending(true)
+    setSessionTransition(kind)
     return true
   }, [history.cancel])
 
   const endSessionTransition = useCallback(() => {
     sessionTransitionPendingRef.current?.finish()
     sessionTransitionPendingRef.current = null
-    setSessionTransitionPending(false)
+    setSessionTransition(null)
   }, [])
 
   const sendRuntimeCommand = useCallback((command: CoreCommand) => {
@@ -884,7 +895,7 @@ export function App() {
     if (changingRuntime) {
       const scroll = presentation?.scroll ?? { atBottom: true, scrollTop: 0 }
       pendingScrollRestoreRef.current = scroll
-      stickToBottom.current = scroll.atBottom
+      followedBottom.current = scroll.atBottom ? scroll.scrollTop : null
       setShowJumpBottom(!scroll.atBottom)
       setConversationFeedback(null)
     }
@@ -908,7 +919,6 @@ export function App() {
     setModelId(snapshot.modelId ?? '')
     setReasoningEffort(snapshot.reasoningEffort)
     setForkOrigin(snapshot.forkOrigin)
-    setForkPendingTurnId(null)
   }, [
     setComposerSessionId,
     setInput,
@@ -1402,54 +1412,57 @@ export function App() {
       releaseConversationScroll()
       const restoration = restoreConversationScrollPosition(pending, scrollElement)
       conversationScrollReleaseRef.current = restoration.release
-      stickToBottom.current = restoration.position.atBottom
+      followedBottom.current = restoration.position.atBottom ? restoration.position.scrollTop : null
       setShowJumpBottom(!restoration.position.atBottom)
     }
     const target = loaded.targetId
     if (target) scrollToConversation(btwPresentation.navigationTargetIds.get(target) ?? target)
   }, [blocks, releaseConversationScroll, history.completeRender, scrollToConversation, btwPresentation.navigationTargetIds])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const scrollElement = scrollRef.current
     const contentElement = conversationContentRef.current
     if (resumingSessionId || !scrollElement || !contentElement) return
     // Markdown/公式与离屏段变为真实高度后，贴底语义仍应指向新的真实底部。
     const observer = new ResizeObserver(() => {
-      if (pendingScrollRestoreRef.current || !stickToBottom.current) return
-      scrollElement.scrollTop = scrollElement.scrollHeight
+      if (pendingScrollRestoreRef.current || followedBottom.current === null) return
+      scrollToEnd()
       setShowJumpBottom(false)
     })
+    observer.observe(scrollElement)
     observer.observe(contentElement)
     return () => observer.disconnect()
-  }, [resumingSessionId])
+  }, [resumingSessionId, scrollToEnd])
 
   useEffect(() => {
-    if (!resumingSessionId && !pendingScrollRestoreRef.current && stickToBottom.current) {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    if (!resumingSessionId && !pendingScrollRestoreRef.current && followedBottom.current !== null) {
+      scrollToEnd()
     }
-  }, [blocks, approval, thinkingGapVisible, resumingSessionId])
+  }, [blocks, approval, thinkingGapVisible, resumingSessionId, scrollToEnd])
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current
-    if (!el || resumingSessionIdRef.current) return
-    if (pendingScrollRestoreRef.current) {
-      pendingScrollRestoreRef.current = captureConversationScrollPosition(el)
+    if (!el || resumingSessionIdRef.current || pendingScrollRestoreRef.current) return
+    const bottom = Math.max(0, el.scrollHeight - el.clientHeight)
+    if (followedBottom.current !== null && Math.abs(bottom - followedBottom.current) > 1) {
+      scrollToEnd()
       return
     }
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
-    stickToBottom.current = nearBottom && (!recentlyScrolledAway() || el.scrollHeight - el.scrollTop - el.clientHeight <= 1)
-    setShowJumpBottom(!stickToBottom.current)
+    const distance = bottom - el.scrollTop
+    const nearBottom = distance < 60
+    const following = nearBottom && (!recentlyScrolledAway() || distance <= 1)
+    followedBottom.current = following ? bottom : null
+    setShowJumpBottom(!following)
     if (!nearBottom && el.scrollTop <= el.clientHeight) void history.loadOlder()
-  }, [history.loadOlder, recentlyScrolledAway])
+  }, [history.loadOlder, recentlyScrolledAway, scrollToEnd])
 
   const jumpToBottom = useCallback(() => {
     history.cancel()
     pendingScrollRestoreRef.current = null
     releaseConversationScroll()
-    stickToBottom.current = true
+    scrollToEnd()
     setShowJumpBottom(false)
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [history.cancel, releaseConversationScroll])
+  }, [history.cancel, releaseConversationScroll, scrollToEnd])
 
   const busy = status !== 'idle' && status !== 'error'
   const workActive = busy || workStartedAt !== null
@@ -1788,14 +1801,18 @@ export function App() {
 
   const compact = useCallback(() => {
     if (status !== 'idle' && status !== 'error') return
-    showConversationFeedback('info', '正在压缩上下文，可点停止取消。')
-    void sendRuntimeCommand({ type: 'compact' })
-  }, [sendRuntimeCommand, showConversationFeedback, status])
+    if (sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
+    const owner = runtimeIdRef.current
+    void sendRuntimeCommand({ type: 'compact' }).then(result => {
+      if (owner === runtimeIdRef.current && result?.error) showError(result.error)
+    }).catch(error => {
+      if (owner === runtimeIdRef.current) showError(error instanceof Error ? error.message : String(error))
+    })
+  }, [sendRuntimeCommand, showError, sshSendUnavailableReason, status])
   const forkConversation = useCallback((sourceTurnId: string) => {
     if (status !== 'idle' && status !== 'error') return
     const sourceSessionId = sessionIdRef.current
-    if (!sourceSessionId || !beginSessionTransition()) return
-    setForkPendingTurnId(sourceTurnId)
+    if (!sourceSessionId || !beginSessionTransition('fork')) return
     void window.whycode.forkSession({ sourceSessionId, sourceTurnId }).then(async (result) => {
       if (!result.ok) {
         showError(result.error)
@@ -1809,10 +1826,7 @@ export function App() {
     }).catch((error) => {
       const message = `创建会话分支失败：${error instanceof Error ? error.message : String(error)}`
       showError(message)
-    }).finally(() => {
-      setForkPendingTurnId(null)
-      endSessionTransition()
-    })
+    }).finally(endSessionTransition)
   }, [
     showError,
     applyRuntimeSnapshot,
@@ -2161,12 +2175,12 @@ export function App() {
         ? { kind: 'main' as const, turnId: block.turnId, restoreFiles }
         : null
     if (!target) return false
-    stickToBottom.current = true
+    scrollToEnd()
     setShowJumpBottom(false)
     const result = await sendRuntimeCommand({ type: 'edit-user-message', target, text })
     if (!result?.ok) throw new Error(result?.error ?? '重新发送失败，请重试')
     return true
-  }, [interactionBusy, sendRuntimeCommand, sshSendUnavailableReason, stopping])
+  }, [interactionBusy, scrollToEnd, sendRuntimeCommand, sshSendUnavailableReason, stopping])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {
     if (!approval) return
@@ -2442,7 +2456,6 @@ export function App() {
                       checkpointRestoreToolUseId={checkpointRestoreToolUseId}
                       fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
                       forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
-                      forkPendingTurnId={forkPendingTurnId}
                       skills={skillCatalog.skills}
                       projectDir={projectDir}
                       onCheckpointRestoreRequest={requestCheckpointRestore}
@@ -2831,6 +2844,7 @@ export function App() {
         </div>
       </section>
 
+      {sessionTransition === 'fork' && <ForkProgressDialog />}
       {settingsSection !== null && (
         <ConnectionSettingsPanel
           initialSection={settingsSection}

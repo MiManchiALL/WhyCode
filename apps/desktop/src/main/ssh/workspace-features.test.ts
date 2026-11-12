@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
+import { access, cp, mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
 import { join, posix } from 'node:path'
 import { it, type TestContext } from 'node:test'
 import { AgentSession, CheckpointManager, SessionStore, SkillCatalogService, createReadFileTool, createSkillTool, inspectLatestTurnEdit,
   type PdfProcessor, type ToolContext, type WorkspaceIO } from '@whycode/core'
 import { readBoundedWorkspaceFile } from '../../../../../packages/core/src/workspace/read.ts'
 import { sshFixture } from './ssh-test-fixture.ts'
-import { copyDirectorySnapshot } from '../directory-snapshot.ts'
 import { WorkspaceFiles } from '../workspace-files.ts'
 import { languageModel, modelEntry, finalStream, toolStream } from '../subagent-test-fixture.ts'
 
@@ -166,8 +165,8 @@ it('SSH 历史支持编辑和冲突保护，Fork 重定位 POSIX 临时文件与
 
     const fork = await store.fork(journal, 'turn', scratchParent)
     const forkScratch = `${scratchParent}/${fork.sessionId}`
-    await io.fs.mkdir(forkScratch)
-    await copyDirectorySnapshot(scratch, forkScratch, io)
+    // 这个 SFTP 夹具在宿主目录准备分支内容；Linux 组件的服务器内复制另有真实 SSH 用例。
+    await cp(join(env.root, 'scratch', journal.sessionId), join(env.root, 'scratch', fork.sessionId), { recursive: true })
     const forkCheckpoints = new CheckpointManager({ sessionId: fork.sessionId, sessionDir: fork.checkpointDirectory, workspaceIO: io })
     assert.equal((await forkCheckpoints.restore('write', 'files')).ok, true)
     assert.equal(await io.fs.readFile(`${forkScratch}/Main/report.txt`, 'utf8'), 'before')

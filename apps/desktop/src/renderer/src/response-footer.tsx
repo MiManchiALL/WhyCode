@@ -8,7 +8,7 @@ import { ResponseFileChanges } from './response-file-changes.tsx'
 import { SourceCapsule } from './source-capsules.tsx'
 import { copyResponseText, ResponseSourcesContext } from './response-presentation.ts'
 
-export function ResponseFooter({ runtimeId, remote, projectDir, activity, final, presentation, onOpenFile, onOpenChanges, onRevealRestore, onFork, forkPending }: {
+export function ResponseFooter({ runtimeId, remote, projectDir, activity, final, presentation, onOpenFile, onOpenChanges, onRevealRestore, onFork }: {
   remote?: boolean
   runtimeId: string
   projectDir: string | null
@@ -19,7 +19,6 @@ export function ResponseFooter({ runtimeId, remote, projectDir, activity, final,
   onOpenChanges?: (page: Extract<RightPanelPage, { kind: 'changes' }>) => void
   onRevealRestore?: () => void
   onFork?: () => void
-  forkPending: boolean
 }) {
   const response = useContext(ResponseSourcesContext)
   const texts = final.filter(block => block.kind === 'text')
@@ -36,6 +35,6 @@ export function ResponseFooter({ runtimeId, remote, projectDir, activity, final,
     ) : null}
     <MessageActions timestamp={texts.at(-1)?.timestamp}
       text={copyResponseText(response, presentation)}
-      className="mt-2" onFork={onFork} forkPending={forkPending} />
+      className="mt-2" onFork={onFork} />
   </div>
 }

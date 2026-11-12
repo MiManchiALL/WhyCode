@@ -1,12 +1,12 @@
+import { once } from 'node:events'
 import { posix } from 'node:path'
 import { localWorkspaceIO, validateSessionId, type WorkspaceBinding } from '@whycode/core'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import type { SessionScratchPaths } from '../session-scratch.ts'
 import type { DesktopSessionRuntime } from '../desktop-session-runtime.ts'
-import { SshConnections } from './connections.ts'
+import { SshConnections, type ConnectedHost } from './connections.ts'
 import { SshConnectionMissingError } from './store.ts'
 import type { TerminalPty } from '../terminal-sessions.ts'
-import { copyDirectorySnapshot } from '../directory-snapshot.ts'
 import type { RemoteCleanupFailure } from '../../shared/session.ts'
 import { sshMessageUnavailableReason } from '../../shared/ssh.ts'
 
@@ -55,16 +55,22 @@ export class SshWorkspaces {
     runtime.workspaceScratch = scratch
     return { home: host.home, scratch }
   }
-  async snapshot(workspace: WorkspaceBinding, sourceId: string, targetId: string): Promise<void> {
-    const host = await this.connect(workspace)
-    if (!host) throw new Error('不是 SSH 工作区')
+  async snapshot(host: ConnectedHost, sourceId: string, targetId: string): Promise<void> {
     const source = await ensureScratch(host, sourceId)
     const target = sshScratchPaths(host.home, targetId)
     await host.io.fs.mkdir(target.rootDirectory)
     try {
-      await copyDirectorySnapshot(source.rootDirectory, target.rootDirectory, host.io)
+      const copy = host.processes.spawn({
+        executable: host.executable,
+        args: ['copy-scratch', source.rootDirectory, target.rootDirectory],
+      }, host.home)
+      let diagnostic = ''
+      copy.stdout.resume()
+      copy.stderr.setEncoding('utf8').on('data', (text: string) => { diagnostic = (diagnostic + text).slice(-4096) })
+      const [code] = await once(copy, 'close')
+      if (code !== 0) throw new Error(diagnostic.trim() || '远端临时目录复制失败')
     } catch (error) {
-      await host.io.fs.rm(target.rootDirectory, { recursive: true, force: true }).catch(cleanup => {
+      await this.removeScratchOnTarget(targetId, host.target).catch(cleanup => {
         throw new AggregateError([error, cleanup], '创建远端临时目录快照失败且未能完整清理')
       })
       throw error
@@ -73,7 +79,10 @@ export class SshWorkspaces {
   async removeScratch(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<void> {
     validateSessionId(sessionId)
     if (workspace?.mode !== 'ssh') return
-    return this.connections.connectionIdForTarget(workspace.target).then(id => this.connections.withFiles(id, async (fs, home) => {
+    return this.removeScratchOnTarget(sessionId, workspace.target)
+  }
+  private async removeScratchOnTarget(sessionId: string, target: string): Promise<void> {
+    return this.connections.connectionIdForTarget(target).then(id => this.connections.withFiles(id, async (fs, home) => {
       const { rootDirectory } = sshScratchPaths(home, sessionId)
       const parent = posix.dirname(rootDirectory)
       const canonical = await fs.realpath(parent).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
@@ -83,7 +92,7 @@ export class SshWorkspaces {
       await fs.rmdir(parent).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error
       })
-    }, workspace.target)).catch((error: unknown) => {
+    }, target)).catch((error: unknown) => {
       throw new SshScratchCleanupError(error)
     })
   }
@@ -119,7 +128,7 @@ export function sshScratchPaths(home: string, sessionId: string): SessionScratch
   return { rootDirectory, mainDirectory: posix.join(rootDirectory, 'Main'), subagentsDirectory: posix.join(rootDirectory, 'subagents') }
 }
 
-async function ensureScratch(host: NonNullable<Awaited<ReturnType<SshWorkspaces['connect']>>>, sessionId: string) {
+async function ensureScratch(host: ConnectedHost, sessionId: string) {
   const scratch = sshScratchPaths(host.home, sessionId)
   for (const directory of [posix.dirname(scratch.rootDirectory), scratch.rootDirectory, scratch.mainDirectory, scratch.subagentsDirectory]) {
     await host.io.fs.mkdir(directory, { recursive: true })

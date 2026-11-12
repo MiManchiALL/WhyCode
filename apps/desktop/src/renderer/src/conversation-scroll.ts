@@ -44,8 +44,9 @@ export function restoreConversationScrollPosition(
     ? findByDataValue(scroller, SECTION_SELECTOR, 'conversationScrollSection', savedAnchor.sectionId)
     : null
   if (!savedAnchor || !section) {
-    scroller.scrollTop = restoredScrollTop(position, scroller)
-    return { position: captureScrollPosition(scroller), release: noop }
+    const scrollTop = restoredScrollTop(position, scroller)
+    scroller.scrollTop = scrollTop
+    return { position: position.atBottom ? { atBottom: true, scrollTop } : captureScrollPosition(scroller), release: noop }
   }
 
   const materialized = materializeSectionsThrough(scroller, section)

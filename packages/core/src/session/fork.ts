@@ -33,14 +33,9 @@ interface CreateSessionForkInput {
 export async function createSessionFork(
   input: CreateSessionForkInput,
 ): Promise<LoadedSession> {
-  const sourcePrefix = withoutPendingInputs(
-    forkPrefix(input.sourceEntries, input.sourceTurnId),
-  )
-  const { metadata } = buildLoadedSession(sourcePrefix)
-  if (metadata.status !== 'idle') {
-    throw new Error('模型回复之后仍有未完成的会话事务，不能创建分支')
-  }
-  const sourceWorkspace = metadata.workspace
+  const prefix = forkPrefix(input.sourceEntries, input.sourceTurnId)
+  const { metadata: { workspace: sourceWorkspace }, pendingUserInputs } = buildLoadedSession(prefix)
+  const sourcePrefix = withoutPendingInputs(prefix, pendingUserInputs)
   const rebase = forkScratchPathMapper(input.scratchCopy, sourceWorkspace.mode === 'ssh' ? path.posix : path)
   const presentations = forkFileReferences(rebase)
   const entries = sourcePrefix.map((entry) =>
@@ -53,6 +48,9 @@ export async function createSessionFork(
       presentations,
     ))
   const loaded = buildLoadedSession(entries)
+  if (loaded.metadata.status !== 'idle') {
+    throw new Error('模型回复之后仍有未完成的会话事务，不能创建分支')
+  }
 
   const targetPaths = getSessionPaths(input.rootDir, input.targetSessionId)
   const stagingPaths = getSessionPaths(input.rootDir, `.fork-${input.targetSessionId}`)
@@ -233,10 +231,8 @@ function rehomeEntry(
  * 恢复草稿与未送达 steering 从未进入模型上下文，不属于 Fork。保留已经被后续
  * 根输入消费的历史身份，否则会破坏当前 schema 的原子消费校验。
  */
-function withoutPendingInputs(entries: SessionEntry[]): SessionEntry[] {
-  const pendingIds = new Set(
-    buildLoadedSession(entries).pendingUserInputs.map((input) => input.id),
-  )
+function withoutPendingInputs(entries: SessionEntry[], pending: readonly PendingUserInput[]): SessionEntry[] {
+  const pendingIds = new Set(pending.map(input => input.id))
   if (pendingIds.size === 0) return entries
 
   // 未送达的输入可能来自重新编辑。移除它时，也移除只有它消费过的旧草稿。

@@ -206,7 +206,10 @@ export class SessionStore {
         await file.close()
       }
     }
-    let loaded = buildLoadedSession(entries)
+    return this.openLoaded(sessionId, paths, buildLoadedSession(entries))
+  }
+
+  private async openLoaded(sessionId: string, paths: SessionPaths, loaded: LoadedSession): Promise<SessionJournal> {
     const diskSignature = await attachmentValidationSignature(paths, loaded).catch(() => null)
     if (
       diskSignature === null
@@ -264,15 +267,15 @@ export class SessionStore {
     const next = this.forkQueue.then(async () => {
       const sourcePaths = this.pathsFor(source.sessionId)
       const sourceEntries = await source.readEntriesSnapshot()
-      const sourceLoaded = buildLoadedSession(sourceEntries)
-      const sourceOrigin = sourceLoaded.metadata.forkOrigin
+      const metadata = source.metadataSnapshot
+      const sourceOrigin = metadata.forkOrigin
       const familyId = sourceOrigin?.familyId ?? source.sessionId
-      const baseTitle = sourceOrigin?.baseTitle ?? sourceLoaded.metadata.title
+      const baseTitle = sourceOrigin?.baseTitle ?? metadata.title
       if (!baseTitle) throw new Error('没有完整用户对话的会话不能创建分支')
 
       const ordinal = await this.nextForkOrdinal(familyId)
       const targetSessionId = randomUUID()
-      const scratchJoin = sourceLoaded.metadata.workspace.mode === 'ssh' ? posix.join : join
+      const scratchJoin = metadata.workspace.mode === 'ssh' ? posix.join : join
       const origin = {
         familyId,
         sourceSessionId: source.sessionId,
@@ -282,7 +285,7 @@ export class SessionStore {
         createdAt: new Date().toISOString(),
       }
       try {
-        await createSessionFork({
+        const loaded = await createSessionFork({
           rootDir: this.rootDir,
           sourcePaths,
           sourceEntries,
@@ -295,7 +298,7 @@ export class SessionStore {
             target: scratchJoin(scratchRootDirectory, targetSessionId),
           } : undefined,
         })
-        return await this.open(targetSessionId)
+        return await this.openLoaded(targetSessionId, this.pathsFor(targetSessionId), loaded)
       } catch (error) {
         await rm(this.pathsFor(targetSessionId).sessionDir, {
           recursive: true,

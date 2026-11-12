@@ -1225,23 +1225,17 @@ async function handleCommand(
       break
     }
     case 'compact': {
-      if (runtime.attachmentPreparationInProgress) {
-        runtime.emit({
-          type: 'error',
-          message: '附件消息准备中，请等待提交完成后再压缩',
-          recoverable: true,
-        })
-        return { ok: false }
+      try {
+        await sshWorkspaces.assertMessageAllowed(runtime.workspace)
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
+      if (runtime.attachmentPreparationInProgress) return { ok: false, error: '附件消息准备中，请等待提交完成后再压缩' }
       if (!runtime.session && !runtime.journal) {
-        runtime.emit({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
-        break
+        return { ok: false, error: '还没有对话，无需压缩' }
       }
       const error = await ensureSession(runtime)
-      if (error) {
-        runtime.emit({ type: 'error', message: error, recoverable: true })
-        return { ok: false }
-      }
+      if (error) return { ok: false, error }
       await runtime.session!.compactNow()
       break
     }
@@ -2359,6 +2353,7 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
   }
   let sourceJournal: SessionJournal | null = null
   let forkedJournal: SessionJournal | null = null
+  let scratchCreated = false
   let runtime: DesktopSessionRuntime | null = null
   try {
     if (sourceRuntime) await sourceRuntime.timeline.flush()
@@ -2374,8 +2369,9 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
         ? posix.dirname(sshScratchPaths(remote.home, sourceJournal.sessionId).rootDirectory)
         : sessionScratch.rootDirectory,
     )
-    if (remote) await sshWorkspaces.snapshot(sourceWorkspace, sourceJournal.sessionId, forkedJournal.sessionId)
+    if (remote) await sshWorkspaces.snapshot(remote, sourceJournal.sessionId, forkedJournal.sessionId)
     else await sessionScratch.snapshot(sourceJournal.sessionId, forkedJournal.sessionId)
+    scratchCreated = true
     await attachSessionWorkspace(forkedJournal)
     await projects.inheritSession(sourceJournal.sessionId, forkedJournal.sessionId)
     runtime = await prepareRuntimeFromJournal(forkedJournal)
@@ -2388,10 +2384,12 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
     if (forkedJournal) {
       await projects.detachSession(forkedJournal.sessionId)
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
-      await (forkedJournal.metadataSnapshot.workspace.mode === 'ssh'
-        ? sshWorkspaces.removeScratch(forkedJournal.sessionId, forkedJournal.metadataSnapshot.workspace)
-        : sessionScratch.remove(forkedJournal.sessionId))
-        .catch((rollbackError) => rollbackErrors.push(rollbackError))
+      if (scratchCreated) {
+        await (forkedJournal.metadataSnapshot.workspace.mode === 'ssh'
+          ? sshWorkspaces.removeScratch(forkedJournal.sessionId, forkedJournal.metadataSnapshot.workspace)
+          : sessionScratch.remove(forkedJournal.sessionId))
+          .catch((rollbackError) => rollbackErrors.push(rollbackError))
+      }
       await removeForkSessionWorkspace(forkedJournal)
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
       await sessions.markDeleting(forkedJournal.sessionId)

@@ -56,7 +56,6 @@ interface ConversationViewProps {
   checkpointRestoreToolUseId: string | null
   fileRollbackBoundaryTurnId: string | null
   forkSourceTurnId: string | null
-  forkPendingTurnId: string | null
   skills: readonly SkillSummary[]
   projectDir: string | null
   onCheckpointRestoreRequest: CheckpointRestoreRequest
@@ -339,8 +338,7 @@ function WorkSection({
               activity={section.activityBlocks} final={section.finalBlocks} presentation={presentation} onOpenFile={props.onOpenFilePreview}
               onOpenChanges={props.onOpenChanges}
               onRevealRestore={props.busy ? undefined : restoreNavigation.navigate}
-              onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined}
-              forkPending={section.forkTurnId !== null && section.forkTurnId === props.forkPendingTurnId} />
+              onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined} />
           )}
         </div>
       </ResponseSourcesContext>

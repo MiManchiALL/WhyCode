@@ -168,12 +168,24 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   await io.fs.writeFile(`${remote.scratch.mainDirectory}/keep.txt`, 'session scratch')
   const forkId = randomUUID()
   const forkScratch = sshScratchPaths(host.home, forkId)
-  await workspaces.snapshot(workspace, journal.sessionId, forkId)
+  const sftpCopy = t.mock.method(host.io.fs, 'copyFile', () => assert.fail('Fork 不应通过 SFTP 传输临时文件'))
+  await workspaces.snapshot(host, journal.sessionId, forkId)
   assert.equal(await io.fs.readFile(`${forkScratch.mainDirectory}/keep.txt`, 'utf8'), 'session scratch')
   await io.fs.writeFile(`${forkScratch.mainDirectory}/keep.txt`, 'fork scratch')
-  await assert.rejects(workspaces.snapshot(workspace, journal.sessionId, forkId))
+  await assert.rejects(workspaces.snapshot(host, journal.sessionId, forkId))
   assert.equal(await io.fs.readFile(`${forkScratch.mainDirectory}/keep.txt`, 'utf8'), 'fork scratch')
   assert.equal(await io.fs.readFile(`${remote.scratch.mainDirectory}/keep.txt`, 'utf8'), 'session scratch')
+  const linked = host.processes.spawn('ln -s keep.txt linked', remote.scratch.mainDirectory)
+  assert.deepEqual(await once(linked, 'close'), [0])
+  try {
+    const rejectedId = randomUUID()
+    await assert.rejects(workspaces.snapshot(host, journal.sessionId, rejectedId), /只支持普通文件和目录/)
+    await assert.rejects(io.fs.stat(sshScratchPaths(host.home, rejectedId).rootDirectory), { code: 'ENOENT' })
+  } finally {
+    const unlinked = host.processes.spawn('unlink linked', remote.scratch.mainDirectory)
+    assert.deepEqual(await once(unlinked, 'close'), [0])
+  }
+  assert.equal(sftpCopy.mock.callCount(), 0)
   await workspaces.removeScratch(forkId, workspace)
   let calls = 0
   const events: CoreEvent[] = []
