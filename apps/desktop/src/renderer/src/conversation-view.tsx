@@ -133,7 +133,7 @@ function toolSegmentSealStates(
 export const ConversationView = memo(function ConversationView(props: ConversationViewProps) {
   const deferred = useDeferredValue(props)
   const rendering = deferred.runtimeId !== props.runtimeId
-  // 读取与渲染共用一次等待生命周期，阶段交接不能重建提示并重启其显示延迟。
+  // 读取和渲染共用一个等待提示。旧正文立即隐藏，保留布局以便恢复阅读位置。
   const pending = !!props.pendingSessionId || rendering
   const { children, emptyState, ...contents } = pending || props.active === false ? deferred : props
   useLayoutEffect(() => {
@@ -142,7 +142,7 @@ export const ConversationView = memo(function ConversationView(props: Conversati
   return (
     <>
       {pending && <SessionLoading />}
-      <div className={pending ? 'wc-conversation-leaving' : undefined}
+      <div className="transition-none aria-hidden:opacity-0"
         aria-hidden={pending || undefined} inert={pending || props.active === false}>
         {emptyState}
         <ConversationContents {...contents} />
