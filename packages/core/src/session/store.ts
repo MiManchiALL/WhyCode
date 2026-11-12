@@ -11,7 +11,7 @@ import {
   type ConsensusPersistedState,
   type ConsensusTaskOutcome,
 } from '../consensus/types.ts'
-import type { StopReason } from '../events.ts'
+import type { CoreEvent, StopReason } from '../events.ts'
 import {
   cloneTaskPlanState,
   emptyTaskPlanState,
@@ -1192,6 +1192,7 @@ export class SessionJournal implements SessionRecorder {
     messages: ModelMessage[],
     activeTurnId?: string,
     taskState?: TaskPlanState,
+    compaction?: Extract<CoreEvent, { type: 'context-compacted' }>,
   ): Promise<void> {
     const recordedMessages = structuredClone(messages)
     return this.enqueue(async () => {
@@ -1210,6 +1211,7 @@ export class SessionJournal implements SessionRecorder {
         {
           type: 'snapshot',
           reason,
+          compaction,
           activeTurnId: activeTurnId ?? null,
           activeTurnEngagedPlanId: activeTurnId ? this.activeTurnEngagedPlanId : null,
           activeConsensusTaskId: this.activeConsensusTaskId,
@@ -1235,6 +1237,7 @@ export class SessionJournal implements SessionRecorder {
         null,
       )
       await this.appendEntries([snapshot])
+      if (compaction) this.appendResponseView(snapshot)
       this.messages = normalizedMessages
       if (snapshot.type === 'snapshot') this.taskState = cloneTaskPlanState(snapshot.taskState)
       this.activeConsensusBaseTurnIds = snapshot.type === 'snapshot'

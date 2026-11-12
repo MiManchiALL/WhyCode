@@ -519,7 +519,25 @@ function collectViewEvents(entries: SessionEntry[]): {
 } {
   const events: ViewEvent[] = []
   const timestamps: string[] = []
+  // 冷恢复时，只有开始记录的摘要已随原进程停止。保留它在执行过程中的位置。
+  let runningCompaction: { index: number; id: string } | null = null
+  const stopUnfinishedCompaction = () => {
+    if (runningCompaction !== null) {
+      events[runningCompaction.index] = { type: 'core-event', event: {
+        type: 'context-compaction', compactionId: runningCompaction.id, status: 'stopped',
+      } }
+    }
+  }
   const push = (event: ViewEvent, timestamp: string): void => {
+    if (event.type === 'core-event') {
+      const core = event.event
+      if (core.type === 'context-compaction') {
+        if (core.status === 'running') stopUnfinishedCompaction()
+        runningCompaction = core.status === 'running' ? { index: events.length, id: core.compactionId } : null
+      } else if (core.type === 'context-compacted' && core.level === 'full') {
+        runningCompaction = null
+      }
+    }
     events.push(event)
     timestamps.push(timestamp)
   }
@@ -532,13 +550,7 @@ function collectViewEvents(entries: SessionEntry[]): {
       : []))
 
   for (const entry of entries) {
-    if (entry.type === 'messages' || entry.type === 'user-input' || entry.type === 'question-skipped') {
-      for (const event of responseViewEvents(entry)) push(event, entry.timestamp)
-    }
-    if (entry.type === 'view-events' || entry.type === 'turn-end' || entry.type === 'btw-response') {
-      for (const event of responseViewEvents(entry)) push(event, entry.timestamp)
-      continue
-    }
+    for (const event of responseViewEvents(entry)) push(event, entry.timestamp)
     if (entry.type === 'btw-input') {
       push({
         type: 'user-message',
@@ -624,6 +636,7 @@ function collectViewEvents(entries: SessionEntry[]): {
       }
     }
   }
+  stopUnfinishedCompaction()
   return { events, timestamps }
 }
 

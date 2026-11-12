@@ -56,6 +56,7 @@ function lastWorkBoundary(blocks: readonly Block[]): number {
 
 function hasPersistentFeedback(block: Block): boolean {
   return (block.kind === 'tool' && block.call.status === 'running')
+    || (block.kind === 'compaction' && block.status === 'running')
     || (block.kind === 'thinking' && block.durationMs === null)
     || (block.kind === 'peer' && block.peer.status === 'working')
 }

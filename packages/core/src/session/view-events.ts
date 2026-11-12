@@ -62,6 +62,14 @@ const candidateDetailsSchema = z.object({
   knownRisks: z.array(z.string()).optional(),
 })
 
+export const contextCompactedSchema = z.object({
+  type: z.literal('context-compacted'),
+  level: z.enum(['micro', 'full']),
+  compactionId: z.string().uuid().optional(),
+  preTokens: z.number().nonnegative(),
+  postTokens: z.number().nonnegative(),
+})
+
 export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('turn-start'), turnId: z.string() }),
   z.object({
@@ -133,12 +141,8 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     taskPlan: taskPlanSchema.nullable().optional(),
     questions: z.array(pendingQuestionSchema).optional(),
   }),
-  z.object({
-    type: z.literal('context-compacted'),
-    level: z.enum(['micro', 'full']),
-    preTokens: z.number(),
-    postTokens: z.number(),
-  }),
+  z.object({ type: z.literal('context-compaction'), compactionId: z.string().uuid(), status: z.enum(['running', 'stopped', 'failed']) }),
+  contextCompactedSchema,
   z.object({ type: z.literal('error'), message: z.string(), recoverable: z.boolean() }),
   z.object({ type: z.literal('user-question'), question: userQuestionSchema }),
   z.object({ type: z.literal('user-question-resolved'), resolutions: questionReplySchema }),
@@ -250,7 +254,7 @@ export function compactViewEvent(event: RecordedViewEvent): RecordedViewEvent {
   return compacted === event.event ? event : { type: 'core-event', event: compacted }
 }
 
-/** CoreEvent → 可持久化的用户可见事件；运行态、审批和已失效检查点不会进入时间线。 */
+/** 派生单独写入时间线的事件。压缩成功已随快照提交，由 responseViewEvents 展开。 */
 export function toViewEvent(event: CoreEvent): RecordedViewEvent | null {
   if (event.type === 'message-injected') {
     return {
@@ -285,7 +289,7 @@ export function toViewEvent(event: CoreEvent): RecordedViewEvent | null {
     case 'checkpoint-created':
     case 'checkpoint-disabled':
     case 'checkpoint-restored':
-    case 'context-compacted':
+    case 'context-compaction':
     case 'error':
     case 'candidate-submitted':
     case 'vote-cast':

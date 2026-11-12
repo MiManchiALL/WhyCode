@@ -1,5 +1,6 @@
 import { open } from 'node:fs/promises'
 import { parseCompactSummaryMessage } from '../prompts/compact.ts'
+import { responseViewEvents } from './response-view.ts'
 import { sessionEntrySchema } from './types.ts'
 
 export interface SessionCompactionSummary {
@@ -11,7 +12,7 @@ export interface SessionCompactionSummary {
   turnPrefixSummary: string | null
 }
 
-/** 完整压缩事件按写入顺序编号；摘要来自其先写稳的 compact snapshot，不复制进展示事件。 */
+/** 按提交顺序读取完整压缩与快照中的摘要，微压缩不占用序号。 */
 export async function readSessionCompaction(
   transcriptPath: string,
   requestedIndex: number,
@@ -33,9 +34,9 @@ export async function readSessionCompaction(
           if (parsed.historySummary) summary.historySummary = parsed.historySummary
           if (parsed.turnPrefixSummary) summary.turnPrefixSummary = parsed.turnPrefixSummary
         }
-      }
-      if (entry.type !== 'view-events') continue
-      for (const view of entry.events) {
+      } else if (entry.type !== 'view-events') continue
+      const events = entry.type === 'snapshot' ? responseViewEvents(entry) : entry.events
+      for (const view of events) {
         if (view.type !== 'core-event' || view.event.type !== 'context-compacted') continue
         const event = view.event
         if (event.level === 'full' && ++index === requestedIndex) {

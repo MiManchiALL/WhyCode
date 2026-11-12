@@ -50,7 +50,7 @@ describe('Markdown 自定义元素契约', () => {
     let state = new RightPanelSessionStore(null).get('test')
     async function click(projectDir: string, path: string, line?: number) {
       await act(async () => root.render(createElement(MarkdownFileLink, {
-        projectDir, path, line, onOpenFile: page => { state = openRightPanelPage(state, page) },
+        baseDir: projectDir, path, line, onOpenFile: page => { state = openRightPanelPage(state, page) },
       }, '对照报告')))
       const button = document.querySelector('button')!
       assert.equal(button.textContent, '对照报告')

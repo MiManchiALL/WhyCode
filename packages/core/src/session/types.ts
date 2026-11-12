@@ -7,14 +7,14 @@ import {
   type ConsensusPersistedState,
   type ConsensusTaskOutcome,
 } from '../consensus/types.ts'
-import type { StopReason } from '../events.ts'
+import type { CoreEvent, StopReason } from '../events.ts'
 import type { TurnAbortReason } from './interruption.ts'
 import {
   taskPlanStateSchema,
   type TaskPlanState,
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
-import { viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
+import { contextCompactedSchema, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
 import {
   createImageAttachmentsSchema,
   imageDeliveryModeSchema,
@@ -398,6 +398,7 @@ const snapshotSchema = chainedEntrySchema.extend({
   type: z.literal('snapshot'),
   parentUuid: z.null(),
   reason: z.enum(['compact', 'rollback', 'recovery']),
+  compaction: contextCompactedSchema.optional(),
   activeTurnId: z.string().min(1).nullable(),
   activeTurnEngagedPlanId: z.string().uuid().nullable(),
   activeConsensusTaskId: z.string().min(1).nullable(),
@@ -418,6 +419,9 @@ const snapshotSchema = chainedEntrySchema.extend({
     taskState: taskPlanStateSchema,
   })),
 }).superRefine((snapshot, ctx) => {
+  if (snapshot.compaction && snapshot.reason !== 'compact') {
+    ctx.addIssue({ code: 'custom', path: ['compaction'], message: '只有压缩快照可记录压缩用量' })
+  }
   const turnIds = new Set<string>()
   snapshot.turnStarts.forEach((start, index) => {
     if (turnIds.has(start.turnId)) {
@@ -693,6 +697,7 @@ export interface SessionRecorder {
     messages: ModelMessage[],
     activeTurnId?: string,
     taskState?: TaskPlanState,
+    compaction?: Extract<CoreEvent, { type: 'context-compacted' }>,
   ): Promise<void>
   recordConsensusTaskStart(
     taskId: string,

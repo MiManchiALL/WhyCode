@@ -118,7 +118,7 @@ import {
 } from './composer-submissions.ts'
 import { PendingUserMessage } from './pending-user-message.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
-import { ConversationFileLinks } from './markdown-content.tsx'
+import { MarkdownNavigation } from './markdown-content.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
 import { useScrollIntent } from './use-scroll-intent.ts'
@@ -2425,7 +2425,7 @@ export function App() {
                       </p>
                     </div>
                   )}
-                  <ConversationFileLinks projectDir={projectDir} onOpenFile={openFilePreview}>
+                  <MarkdownNavigation baseDir={projectDir} onOpenFile={openFilePreview}>
                     <ConversationView
                       remote={workspace.mode === 'ssh'}
                       runtimeId={runtimeId}
@@ -2461,7 +2461,7 @@ export function App() {
                       )}
                       {thinkingGapVisible && <ThinkingGapIndicator />}
                     </ConversationView>
-                  </ConversationFileLinks>
+                  </MarkdownNavigation>
                 </div>
               </main>
             </div>

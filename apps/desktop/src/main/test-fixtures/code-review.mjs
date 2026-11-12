@@ -103,6 +103,11 @@ app.whenReady().then(async () => {
   try {
     await win.loadFile(page)
     await until('document.querySelector(".wc-file-link")', 'fixture ready')
+    const labelStyle = await run(`(() => {
+      const style = getComputedStyle(document.querySelector('.wc-file-link [data-streamdown="inline-code"]'))
+      return [style.backgroundColor, style.borderTopWidth, style.paddingInlineStart]
+    })()`)
+    assert.deepEqual(labelStyle, ['rgba(0, 0, 0, 0)', '0px', '0px'])
     await jump()
     await until(element('[data-code-row="63"] code span'), 'worker colours the selected code')
     assert.deepEqual(await run('Array.from(document.querySelectorAll("[data-line-focus]"), row => Number(row.dataset.codeRow))'), [63, 64, 65])

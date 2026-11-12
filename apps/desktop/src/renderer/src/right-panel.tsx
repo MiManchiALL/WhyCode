@@ -16,7 +16,8 @@ import {
   type RightPanelSessionState,
 } from './right-panel-state.ts'
 import { SubagentPanelContent } from './subagent-panel.tsx'
-import { ConversationFileLinks } from './markdown-content.tsx'
+import { MarkdownNavigation } from './markdown-content.tsx'
+import { resolveWorkspaceFilePath } from './local-files.ts'
 import { RightPanelTabs } from './right-panel-tabs.tsx'
 import { TerminalPanel } from './terminal-panel.tsx'
 import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
@@ -187,20 +188,23 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
       return <TerminalPanel key={page.terminal.id} terminal={page.terminal} active={props.active} />
     case 'file':
       return props.active ? (
-        <RightPanelFilePreview
-          key={filePageKey(props.runtimeId, page)}
-          runtimeId={props.runtimeId}
-          refreshRevision={props.refreshRevision}
-          page={page}
-          onChange={props.onUpdatePage}
-          onReferenceInBrowser={props.canReferenceBrowser
-            ? path => props.onOpenPage(browserReferencePage(props.state, browserAddress(path), true, { kind: 'new' }, undefined, props.remote)) : undefined}
-        />
+        <MarkdownNavigation baseDir={resolveWorkspaceFilePath('..', page.path)} onOpenFile={props.onOpenPage}
+          onOpenWeb={url => openBrowser(props, url)}>
+          <RightPanelFilePreview
+            key={filePageKey(props.runtimeId, page)}
+            runtimeId={props.runtimeId}
+            refreshRevision={props.refreshRevision}
+            page={page}
+            onChange={props.onUpdatePage}
+            onReferenceInBrowser={props.canReferenceBrowser
+              ? path => props.onOpenPage(browserReferencePage(props.state, browserAddress(path), true, { kind: 'new' }, undefined, props.remote)) : undefined}
+          />
+        </MarkdownNavigation>
       ) : <div className="min-h-0 flex-1" />
     case 'subagent-overview':
     case 'subagent-transcript':
       return (
-        <ConversationFileLinks projectDir={props.projectDir} onOpenFile={props.onOpenPage}>
+        <MarkdownNavigation baseDir={props.projectDir} onOpenFile={props.onOpenPage}>
           <SubagentPanelContent
             active={props.active}
             runtimeId={props.runtimeId}
@@ -213,7 +217,7 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
             onSelect={(subagentId) => props.onOpenPage({ kind: 'subagent-transcript', subagentId })}
             onBack={() => props.onOpenPage({ kind: 'subagent-overview' })}
           />
-        </ConversationFileLinks>
+        </MarkdownNavigation>
       )
   }
 }
@@ -233,6 +237,7 @@ function openWorkspace(props: RightPanelProps): void {
   props.onOpenPage(existing?.page ?? { kind: 'workspace', expanded: [] })
 }
 
-function openBrowser(props: RightPanelProps, url = 'about:blank', workspaceFile = false): void {
-  props.onOpenPage({ kind: 'browser', id: crypto.randomUUID(), url, title: '', workspaceFile })
+function openBrowser(props: RightPanelProps, url = 'about:blank'): void {
+  const existing = url !== 'about:blank' && props.state.tabs.find(tab => tab.page.kind === 'browser' && tab.page.url === url)
+  props.onOpenPage(existing ? existing.page : { kind: 'browser', id: crypto.randomUUID(), url, title: '' })
 }

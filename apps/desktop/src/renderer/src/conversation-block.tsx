@@ -126,6 +126,15 @@ export function BlockView({
     )
   }
   if (block.kind === 'compaction') {
+    if (block.status !== 'completed') {
+      const running = block.status === 'running'
+      return <div className="wc-compaction-summary wc-type-caption mb-4" role="status" data-conversation-scroll-block={block.id}>
+        <span className={`font-semibold ${running ? 'wc-session-loading' : ''}`}>
+          {running ? '上下文正在压缩中' : block.status === 'stopped' ? '上下文压缩已停止' : '上下文压缩失败'}
+        </span>
+        {running && <LoaderCircle size={14} className="ml-auto shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+      </div>
+    }
     return (
       <button
         type="button"

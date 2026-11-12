@@ -21,16 +21,14 @@ it('按完整压缩序号读取原摘要，微压缩不计数，冷恢复后仍�
     await journal.recordViewEvents([{ type: 'core-event', event: {
       type: 'context-compacted', level: 'full', preTokens: 60_000, postTokens: 20_000,
     } }])
-    await journal.recordSnapshot('compact', [history, prefix])
-    await journal.recordViewEvents([{ type: 'core-event', event: {
+    await journal.recordSnapshot('compact', [history, prefix], undefined, undefined, {
       type: 'context-compacted', level: 'micro', preTokens: 40_000, postTokens: 35_000,
-    } }])
+    })
     await journal.recordSnapshot('compact', [createCompactSummaryMessage({
       historySummary: '## 1. 历史任务\nA、B 均已完成', turnPrefixSummary: null, turnId: null,
-    })])
-    await journal.recordViewEvents([{ type: 'core-event', event: {
+    })], undefined, undefined, {
       type: 'context-compacted', level: 'full', preTokens: 45_000, postTokens: 12_000,
-    } }])
+    })
 
     const reopened = await store.open(journal.sessionId)
     const first = await reopened.readCompactionSummary(1)

@@ -17,7 +17,15 @@ export function adaptMessagesForProvider(
   protocol: ProviderProtocol,
 ): ModelMessage[] {
   if (protocol === 'openai-responses') {
-    return normalizeResponseMessagesForProvider(messages, protocol)
+    // Responses 只能重放有 itemId 或加密内容的推理项。SDK 会把其余项的全文写入警告。
+    return normalizeResponseMessagesForProvider(messages, protocol).flatMap<ModelMessage>(message => {
+      if (message.role !== 'assistant' || !Array.isArray(message.content)) return [message]
+      const content = message.content.filter(part => part.type !== 'reasoning'
+        || typeof part.providerOptions?.openai?.itemId === 'string'
+        || typeof part.providerOptions?.openai?.reasoningEncryptedContent === 'string')
+      if (content.length === message.content.length) return [message]
+      return content.length ? [{ ...message, content }] : []
+    })
   }
   if (protocol !== 'openai-chat') return [...messages]
   const adapted: ModelMessage[] = []
