@@ -317,9 +317,6 @@ function WorkSection({
               ))}
         </div>
       )}
-      {!expanded && section.activityBlocks.filter(block => block.kind === 'compaction').map(block => (
-        <ConversationBlock key={block.id} {...conversationBlockProps(props, block)} />
-      ))}
       {section.kind === 'completed-work' && section.duration.outcome === 'error' && section.duration.error && (
         <div className="wc-type-caption mb-4 flex items-start gap-2 px-1 text-[var(--wc-muted)]" role="status">
           <AlertCircle size={15} className="mt-0.5 shrink-0 text-[var(--wc-danger)]" />

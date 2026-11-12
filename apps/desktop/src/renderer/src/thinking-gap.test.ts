@@ -114,6 +114,8 @@ describe('模型空窗反馈', () => {
   })
 
   it('运行中工具、流式思考和协商代理使用自身的持续反馈', () => {
+    assert.equal(delay([user, { kind: 'compaction', id: 'attempt', index: 1, status: 'running' }]), null)
+    assert.equal(delay([user, { kind: 'compaction', id: 'attempt', index: 1, status: 'stopped' }]), THINKING_GAP_VISIBLE_IDLE_MS)
     assert.equal(delay([
       user,
       {

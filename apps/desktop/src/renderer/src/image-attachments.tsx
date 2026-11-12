@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { X } from 'lucide-react'
 import type { ImageAttachment } from '@whycode/core'
 import { USER_IMAGE_ATTACHMENT_MAX_COUNT } from '@whycode/core/image-limits'
 import {
@@ -100,27 +101,24 @@ export function ImageDraftStrip({
         <BrowserReferenceChip items={drafts.flatMap(draft => draft.source ? [{ id: draft.id, previewUrl: draft.previewUrl, source: draft.source }] : [])}
           onRemove={onRemove} onEdit={onEditReference} onPreview={setPreviewId} />
         {drafts.filter(draft => !draft.source).map((draft) => (
-          <div key={draft.id} className="group relative h-20 w-20 overflow-hidden rounded border border-neutral-200 bg-white">
+          <div key={draft.id} className="group/image relative h-20 w-20 overflow-hidden rounded-lg border border-[var(--wc-line)] bg-[var(--wc-surface)]">
             <button
               type="button"
               className="block h-full w-full cursor-zoom-in"
               onClick={() => setPreviewId(draft.id)}
-              title={`查看 ${draft.name}`}
+              aria-label={`查看 ${draft.name}`}
             >
               <img src={draft.previewUrl} alt={draft.name} className="h-full w-full object-cover" />
             </button>
             {onRemove && <button
               type="button"
-              className="absolute right-1 top-1 rounded bg-black/65 px-1.5 py-0.5 text-xs text-white opacity-80 hover:opacity-100"
+              className="wc-focus-ring pointer-events-none absolute right-1 top-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-0 group-hover/image:pointer-events-auto group-hover/image:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 hover:bg-black/80"
               onClick={() => onRemove(draft.id)}
-              title={`移除 ${draft.name}`}
+              title="移除图片"
               aria-label={`移除 ${draft.name}`}
             >
-              ×
+              <X size={12} aria-hidden="true" />
             </button>}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 wc-type-tiny text-white">
-              {draft.name}
-            </div>
           </div>
         ))}
       </div>

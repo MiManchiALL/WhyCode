@@ -9,7 +9,7 @@ import { ComposerDraftStore, type ComposerDraft } from '../composer-drafts.ts'
 import { DocumentPreview } from '../document-preview.tsx'
 import { FileDiff } from '../file-diff.tsx'
 import { ConversationFeedbackContext } from '../conversation-feedback.tsx'
-import { MarkdownFileLink } from '../markdown-elements.ts'
+import { MarkdownContent, MarkdownNavigation } from '../markdown-content.tsx'
 import { activeRightPanelPage, closeRightPanelTab, openRightPanelPage, RightPanelSessionStore, updateRightPanelPage, type RightPanelPage } from '../right-panel-state.ts'
 import '../styles.css'
 
@@ -43,7 +43,9 @@ function Fixture() {
   const saveMessage = (text: string) => { setMessage(text); sessionStorage.setItem('sent', text) }
   return <div className="grid h-screen grid-cols-[minmax(240px,1fr)_minmax(320px,1.3fr)]">
     <main className="space-y-4 p-5">
-      <MarkdownFileLink path={path} projectDir={workspace} line={64} endLine={66} onOpenFile={open}>样例代码</MarkdownFileLink>
+      <div className="wc-conversation-copy"><MarkdownNavigation baseDir={workspace} onOpenFile={open}>
+        <MarkdownContent text={'[`sample` 代码](sample.ts#L64-L66)'} />
+      </MarkdownNavigation></div>
       <p id="prose">正文可单独选择。</p>
       <button id="outside" onMouseDown={e => e.preventDefault()}>其它区域</button>
       <div id="composer" className="wc-composer-chips"><CodeReferenceChips items={items} onRemove={references.remove} /></div>

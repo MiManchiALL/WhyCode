@@ -15,8 +15,34 @@ import type { ReasoningEffortSelection } from './catalog.ts'
 import { providerOptionsWithReasoningEffort } from './reasoning-effort.ts'
 import type { ModelEntry } from './registry.ts'
 import { getModelEntry } from './registry.ts'
+import { createOpenAI } from '@ai-sdk/openai'
+import { adaptMessagesForProvider } from './message-adapter.ts'
 
 describe('OpenAI Responses 推理摘要线格式', () => {
+  it('跨模型历史不产生含推理正文的 SDK 警告，仍重放原生推理项与普通回答', async () => {
+    const history: ModelMessage[] = [
+      { role: 'user', content: '原始问题' },
+      { role: 'assistant', content: [{ type: 'reasoning', text: '其他模型的私有推理' }] },
+      { role: 'assistant', content: [
+        { type: 'reasoning', text: '其他模型的私有推理', providerOptions: { deepseek: {} } },
+        { type: 'reasoning', text: '可回放摘要', providerOptions: { openai: { reasoningEncryptedContent: 'encrypted-test' } } },
+        { type: 'text', text: '普通回答' },
+      ] },
+      { role: 'user', content: '继续' },
+    ]
+    let wire = ''
+    const model = createOpenAI({ apiKey: 'test', fetch: async (_input, init) => {
+      wire = String(init?.body)
+      return Response.json({ id: 'resp_test', output: [], usage: { input_tokens: 10, output_tokens: 0 } })
+    } }).responses('gpt-6.1-terra')
+    const result = await generateText({ model, messages: adaptMessagesForProvider(history, 'openai-responses') })
+    assert.deepEqual(result.warnings, [])
+    assert.doesNotMatch(wire, /私有推理/u)
+    assert.match(wire, /encrypted-test/u)
+    assert.match(wire, /普通回答/u)
+    assert.match(JSON.stringify(adaptMessagesForProvider(history, 'openai-chat')), /私有推理/u)
+  })
+
   it('内置 GPT 默认只请求摘要，不覆盖厂商默认推理强度', async () => {
     const captured = await captureRequest(getModelEntry('openai:gpt-6.1-sol'))
 

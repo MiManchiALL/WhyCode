@@ -29,6 +29,15 @@ export function conversationSections(
   blocks: readonly Block[],
   activeWorkStartedAt: number | null = null,
 ): ConversationSection[] {
+  // 中断后再试的横条跟随实际重试位置。原始块仍保留，历史分页和回滚使用稳定索引。
+  const superseded = new Set<Block>()
+  let previous: Extract<Block, { kind: 'compaction' }> | undefined
+  for (const block of blocks) {
+    if (block.kind !== 'compaction') continue
+    if (previous && previous.status !== 'completed' && previous.index === block.index) superseded.add(previous)
+    previous = block
+  }
+  if (superseded.size) blocks = blocks.filter(block => !superseded.has(block))
   const sections: ConversationSection[] = []
   let segmentStart = 0
 

@@ -25,6 +25,7 @@ export interface CompactOptions {
   applicationContext?: string
   prepareMessagesForModel?: (messages: ModelMessage[]) => ModelMessage[] | Promise<ModelMessage[]>
   providerOptions?: ProviderMetadata
+  onStart?: () => void
   onRetry?: (retry: ModelRequestRetry) => void
 }
 type SummaryKind = 'history' | 'turn-prefix'
@@ -36,6 +37,8 @@ export async function compactMessages(options: CompactOptions): Promise<CompactR
   const tailBudget = compactTailBudget(capabilities)
   let preparation = prepareCompaction(conversation, tailBudget, options.mode === 'manual')
   if (!preparation) return { messages: [...messages], summaryText: '' }
+  options.abortSignal.throwIfAborted()
+  options.onStart?.()
   const totalBudget = Math.min(12_000, capabilities.maxOutput,
     Math.max(512, Math.floor((capabilities.contextWindow - Math.min(capabilities.maxOutput, 20_000)) * 0.08)))
   let historySummary: string | null = null

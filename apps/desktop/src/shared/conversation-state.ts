@@ -85,7 +85,8 @@ export type Block =
       error?: string
     }
   | { kind: 'model-request-retry'; id: string; retry: number; maxRetries: number; message: string }
-  | { kind: 'compaction'; id: string; index: number; preTokens: number; postTokens: number }
+  | { kind: 'compaction'; id: string; index: number; status: Extract<CoreEvent, { type: 'context-compaction' }>['status'] }
+  | { kind: 'compaction'; id: string; index: number; status: 'completed'; preTokens: number; postTokens: number }
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
   | { kind: 'peer'; id: string; peer: PeerBlockData }
@@ -315,14 +316,9 @@ function applyStableCoreEvent(
         kind: 'model-request-retry', id: nextBlockId(state),
         retry: event.retry, maxRetries: event.maxRetries, message: event.message,
       })
-    case 'context-compacted': {
-      if (event.level === 'micro') return state
-      const index = state.compactionCount + 1
-      return appendBlock({ ...state, compactionCount: index }, {
-        kind: 'compaction', id: nextBlockId(state), index,
-        preTokens: event.preTokens, postTokens: event.postTokens,
-      })
-    }
+    case 'context-compaction':
+    case 'context-compacted':
+      return applyCompaction(state, event)
     case 'work-finished': {
       // BTW 的成功回复由独立工作终点确认；普通回合使用执行层的 turn-end。
       const finished = event.btw && event.outcome === 'completed' ? confirmTurnResponse(state) : state
@@ -932,6 +928,22 @@ function updateTool(
         : block,
     ),
   }
+}
+
+function applyCompaction(state: ConversationState, event: Extract<CoreEvent, { type: 'context-compaction' | 'context-compacted' }>): ConversationState {
+  if (event.type === 'context-compacted' && event.level === 'micro') return state
+  const index = state.compactionCount + 1
+  const id = event.compactionId ?? nextBlockId(state)
+  const start = event.compactionId ? state.blocks.findLastIndex(block => block.id === id) : -1
+  const previous = state.blocks[start]
+  // 恢复快照可能已包含随后送达的同一完成事件。
+  if (previous?.kind === 'compaction' && previous.status === 'completed') return state
+  const block: Block = event.type === 'context-compacted'
+    ? { kind: 'compaction', id, index, status: 'completed', preTokens: event.preTokens, postTokens: event.postTokens }
+    : { kind: 'compaction', id, index, status: event.status }
+  const next = block.status === 'completed' ? { ...state, compactionCount: index } : state
+  if (start < 0) return appendBlock(next, block)
+  return { ...next, blocks: next.blocks.with(start, block) }
 }
 
 function appendBlock(state: ConversationState, block: Block): ConversationState {

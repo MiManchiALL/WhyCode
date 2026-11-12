@@ -76,11 +76,17 @@ describe('手动压缩 PTL 的会话提交与恢复', () => {
       assert.equal(session.isBusy, false)
       assert.equal(model.doStreamCalls.length, 0, '手动压缩本身不继续执行任务')
       assert.equal(events.filter(event => event.type === 'model-request-retry').length, 1)
+      const progress = events.filter(event => event.type === 'context-compaction')
+      assert.deepEqual(progress.map(event => event.status), outcome === 'success' ? ['running'] : ['running', 'failed'])
+      assert.equal(new Set(progress.map(event => event.compactionId)).size, 1)
       const current = session.captureMessageSnapshot()
       const restored = (await store.open(journal.sessionId)).initialMessages
       if (outcome === 'success') {
         assert.equal(commits, 1)
         assert.equal(events.filter(event => event.type === 'context-compacted' && event.level === 'full').length, 1)
+        const compacted = events.find(event => event.type === 'context-compacted')
+        assert.equal(compacted?.compactionId, progress[0]!.compactionId)
+        assert.equal((await journal.readCompactionSummary(1)).turnPrefixSummary, '新 P_B')
         assert.equal(events.some(event => event.type === 'error'), false)
         const summaries = current.map(parseCompactSummaryMessage).filter(state => state !== null)
         assert.equal(summaries[0]?.historySummary, '新 H')

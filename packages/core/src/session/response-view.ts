@@ -13,6 +13,9 @@ export function committedViewBatch(events: RecordedViewEvent[]): ViewEvent[] {
 
 /** Journal 已按模型步骤提交可见事件。展开记录时保留批次和回合边界，不重复落盘。 */
 export function responseViewEvents(entry: SessionEntry): ViewEvent[] {
+  if (entry.type === 'snapshot' && entry.compaction) {
+    return [{ type: 'core-event', event: entry.compaction }]
+  }
   if (entry.type === 'messages') {
     return entry.messages.flatMap((message: ConversationMessage) => {
       const events: VisibleCoreEvent[] = []

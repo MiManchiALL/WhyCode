@@ -978,9 +978,37 @@ describe('会话界面时间线重建', () => {
     assert.deepEqual(replay.blocks, live.blocks)
     assert.equal(replay.compactionCount, 2)
     assert.deepEqual(replay.blocks, [
-      { kind: 'compaction', id: 'b0', index: 1, preTokens: 49_000, postTokens: 26_000 },
-      { kind: 'compaction', id: 'b1', index: 2, preTokens: 49_000, postTokens: 26_000 },
+      { kind: 'compaction', id: 'b0', index: 1, status: 'completed', preTokens: 49_000, postTokens: 26_000 },
+      { kind: 'compaction', id: 'b1', index: 2, status: 'completed', preTokens: 49_000, postTokens: 26_000 },
     ])
+  })
+
+  it('压缩重试归入新轮实际位置，快照与迟到的完成通知只占一个摘要序号', () => {
+    const first = { type: 'context-compaction', compactionId: 'attempt-a' } as const
+    const second = { type: 'context-compaction', compactionId: 'attempt-b' } as const
+    const finish = { type: 'context-compacted', level: 'full', compactionId: second.compactionId,
+      preTokens: 49_000, postTokens: 26_000 } as const
+    const stopped: ViewEvent[] = [
+      { type: 'user-message', text: '原始要求', startsTurn: true }, core({ ...first, status: 'running' }),
+      core({ ...first, status: 'stopped' }), core({ type: 'work-finished', outcome: 'stopped', forkTurnId: null, durationMs: 100 }),
+    ]
+    const before = createConversationState(stopped)
+    assert.equal(before.blocks.filter(b => b.kind === 'compaction' && b.status === 'stopped').length, 1)
+    const events = [...stopped, { type: 'user-message', text: '请继续', startsTurn: true } as const,
+      core({ ...second, status: 'running' }), core({ type: 'model-request-retry', retry: 1, maxRetries: 3, delayMs: 0, message: '重试' })]
+    const running = createConversationState(events)
+    const visible = conversationSections(running.blocks)
+    const previous = visible[0]
+    assert.ok(previous?.kind === 'completed-work')
+    assert.deepEqual(previous.activityBlocks, [])
+    assert.deepEqual(visible.slice(1).map(s => s.kind === 'block' && s.block.kind),
+      ['user', 'compaction', 'model-request-retry'])
+    const success = applyCoreEvent(running, finish)
+    assert.deepEqual(success, createConversationState([...events, core(finish)]))
+    assert.equal(applyCoreEvent(success, finish), success)
+    assert.equal(success.compactionCount, 1)
+    const complete = success.blocks.find(b => b.id === second.compactionId)
+    assert.ok(complete?.kind === 'compaction' && complete.status === 'completed' && complete.index === 1)
   })
 
   it('回滚失败不追加到对话时间线', () => {

@@ -44,7 +44,7 @@ export function TaskPlanView({
               <span className="mr-1 text-[var(--wc-faint)]">{item.id}</span>
               {item.outcome}
               {item.kind === 'verification' && (
-                <span className="ml-1 rounded-md bg-[var(--wc-sage)] px-1 py-0.5 wc-type-tiny text-[var(--wc-sage-ink)]">
+                <span className="ml-1 inline-block whitespace-nowrap rounded-md bg-[var(--wc-sage)] px-1 wc-type-tiny text-[var(--wc-sage-ink)]">
                   验证
                 </span>
               )}

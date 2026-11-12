@@ -259,10 +259,12 @@ export type CoreEvent =
   /** 精确文件检查点建立失败；同一会话只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }
   // --- 上下文压缩（M2-d）---
+  | { type: 'context-compaction'; compactionId: string; status: 'running' | 'stopped' | 'failed' }
   | {
       type: 'context-compacted'
       /** micro = 仅清理旧工具输出；full = 摘要压缩 */
       level: 'micro' | 'full'
+      compactionId?: string
       preTokens: number
       postTokens: number
     }

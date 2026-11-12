@@ -46,15 +46,16 @@ export function MarkdownAnchor({
 }
 
 export interface FileLinkNavigation {
-  projectDir: string
+  baseDir: string
   onOpenFile: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
+  onOpenWeb?: (url: string) => void
 }
 
-export function MarkdownFileLink({ path, line, endLine, projectDir, onOpenFile, children }:
+export function MarkdownFileLink({ path, line, endLine, baseDir, onOpenFile, children }:
   MarkdownFileTarget & FileLinkNavigation & { children?: ReactNode }) {
   // Windows 会把 POSIX 根路径解释到当前盘符，两种工作区的绝对路径不能互换。
-  if (isWindowsAbsolutePath(projectDir) ? path.startsWith('/') : isWindowsAbsolutePath(path)) return children
-  const fullPath = resolveWorkspaceFilePath(path, projectDir)
+  if (isWindowsAbsolutePath(baseDir) ? path.startsWith('/') : isWindowsAbsolutePath(path)) return children
+  const fullPath = resolveWorkspaceFilePath(path, baseDir)
   return createElement('button', {
     type: 'button',
     className: 'wc-path-reference wc-file-link wc-focus-ring',

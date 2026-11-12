@@ -2147,43 +2147,19 @@ export class AgentSession {
       await this.refreshProjectInstructions()
       const tools = this.buildToolSet(signal, { emit, loopHealth: this.loopHealth },
         this.options.mcpRuntime?.toolDefinitions(this.messages) ?? [])
-      const result = await compactMessages({
-        model: this.createLanguageModel(), messages: this.messages,
-        capabilities: this.currentModelSelection().model.capabilities,
-        abortSignal: signal, mode: 'manual', tools: toolsForModel(tools),
-        applicationContext: this.compactApplicationContext(),
-        prepareMessagesForModel: messages => this.messagesForCurrentModel(messages, signal, false),
-        providerOptions: this.requestProviderOptions(),
-        onRetry: retry => emit({ type: 'model-request-retry', ...retry }),
-      })
-      if (result.summaryText) {
-        const messages = await this.prepareCompactedMessages(result.messages, signal)
-        await this.persistRequired((recorder) =>
-          recorder.recordSnapshot('compact', messages, undefined, this.taskPlan?.stateSnapshot),
-          '保存上下文压缩',
-        )
-        carryPendingQuestions(messages, this.messages)
-        this.messages = messages
-        this.rebuildActivePdfAttachments()
-        this.tokenBaseline = null
-        this.compactFailures = 0
-        emit({
-          type: 'context-compacted',
-          level: 'full',
-          preTokens,
-          postTokens: this.estimateCurrentContextTokens(),
-        })
-        this.emitContextUsage()
-        completed = true
-      } else {
+      completed = await this.runFullCompaction('manual', signal, toolsForModel(tools), false, async (messages, compactionId) => {
+        const postTokens = this.estimateCurrentContextTokens(messages, undefined, null)
+        await this.commitCompaction(messages, signal, { type: 'context-compacted', level: 'full', compactionId, preTokens, postTokens })
+        this.emitContextUsage(undefined, postTokens)
+        return true
+      }) ?? false
+      if (!completed) {
         emit({ type: 'error', message: '当前没有可压缩的对话历史', recoverable: true })
       }
     } catch (error) {
-      emit({
+      if (!signal.aborted) emit({
         type: 'error',
-        message: signal.aborted
-          ? '压缩已取消'
-          : `压缩失败：${error instanceof Error ? error.message : String(error)}`,
+        message: `压缩失败：${error instanceof Error ? error.message : String(error)}`,
         recoverable: true,
       })
     }
@@ -2227,7 +2203,7 @@ export class AgentSession {
     // 微压缩先写稳候选快照；保存失败不能改写活动历史。
     const cleaned = microcompact(this.messages)
     if (cleaned) {
-      request = await this.commitAutoCompaction('micro', prepared.usedTokens, abortSignal, cleaned)
+      request = await this.commitAutoCompaction('micro', prepared, abortSignal, cleaned)
       if (request.usedTokens < threshold && (!force
         || estimateMessagesTokens(request.messages) < estimateMessagesTokens(prepared.messages))) {
         this.compactFailures = 0
@@ -2235,35 +2211,45 @@ export class AgentSession {
       }
     }
 
-    // 第二级：全量摘要压缩
-    let result: Awaited<ReturnType<typeof compactMessages>>
+    return await this.runFullCompaction('auto', abortSignal, tools, planExecutionEngaged,
+      (messages, id) => this.commitAutoCompaction('full', request, abortSignal, messages, id)) ?? request
+  }
+
+  private async runFullCompaction<T>(
+    mode: 'auto' | 'manual', abortSignal: AbortSignal, tools: ToolSet | undefined,
+    planExecutionEngaged: boolean, commit: (messages: ModelMessage[], compactionId: string) => Promise<T>,
+  ): Promise<T | null> {
+    const { emit } = this.options
+    const compactionId = randomUUID()
+    let inProgress = false
     try {
-      result = await compactMessages({
-        model: this.createLanguageModel(), messages: this.messages, capabilities: model.capabilities,
-        abortSignal, mode: 'auto', tools,
-        applicationContext: this.compactApplicationContext(planExecutionEngaged, this.activeTurn!.id),
+      const result = await compactMessages({
+        model: this.createLanguageModel(), messages: this.messages, capabilities: this.currentModelSelection().model.capabilities,
+        abortSignal, mode, tools,
+        applicationContext: this.compactApplicationContext(planExecutionEngaged, this.activeTurn?.id),
         prepareMessagesForModel: messages => this.messagesForCurrentModel(messages, abortSignal, false),
         providerOptions: this.requestProviderOptions(),
-        onRetry: retry => this.options.emit({ type: 'model-request-retry', ...retry }),
+        onStart: () => {
+          inProgress = true
+          emit({ type: 'context-compaction', compactionId, status: 'running' })
+        },
+        onRetry: retry => emit({ type: 'model-request-retry', ...retry }),
+      }).catch((error: unknown) => {
+        // 自动摘要失败时原请求仍可能可用。候选校验和快照提交失败必须中止。
+        if (mode === 'manual' || abortSignal.aborted) throw error
+        return null
       })
-    } catch (error) {
-      if (abortSignal.aborted) throw error
-      this.recordAutoCompactFailure()
-      // 失败不阻塞：请求可能仍能成功（估算偏保守）。
-      return request
+      if (!result?.summaryText) {
+        if (mode === 'auto') this.recordAutoCompactFailure()
+        return null
+      }
+      const value = await commit(await this.prepareCompactedMessages(result.messages, abortSignal), compactionId)
+      inProgress = false
+      this.compactFailures = 0
+      return value
+    } finally {
+      if (inProgress) emit({ type: 'context-compaction', compactionId, status: abortSignal.aborted ? 'stopped' : 'failed' })
     }
-    if (!result.summaryText) {
-      this.recordAutoCompactFailure()
-      return request
-    }
-    const messages = await this.prepareCompactedMessages(result.messages, abortSignal)
-    const projected = await this.messagesForCurrentModel(messages, abortSignal)
-    if (estimateMessagesTokens(projected) >= estimateMessagesTokens(request.messages)) {
-      throw new Error('压缩后的原始用户输入、保留尾部与必要上下文仍无法缩小请求；请减少附件或选择更大的上下文')
-    }
-    const compactedRequest = await this.commitAutoCompaction('full', request.usedTokens, abortSignal, messages)
-    this.compactFailures = 0
-    return compactedRequest
   }
 
   /** 重建权威上下文但暂不替换活动历史；快照写稳后才能采纳压缩结果。 */
@@ -2282,24 +2268,35 @@ export class AgentSession {
 
   private async commitAutoCompaction(
     level: 'micro' | 'full',
-    preTokens: number,
+    previous: PreparedRequestContext,
     abortSignal: AbortSignal,
     messages: ModelMessage[],
+    compactionId?: string,
   ): Promise<PreparedRequestContext> {
+    const request = await this.prepareRequestContext(abortSignal, messages, null)
+    if (level === 'full' && estimateMessagesTokens(request.messages) >= estimateMessagesTokens(previous.messages)) {
+      throw new Error('压缩后的原始用户输入、保留尾部与必要上下文仍无法缩小请求；请减少附件或选择更大的上下文')
+    }
+    await this.commitCompaction(messages, abortSignal, {
+      type: 'context-compacted', level, compactionId, preTokens: previous.usedTokens, postTokens: request.usedTokens,
+    })
+    this.emitContextUsage(request.messages, request.usedTokens)
+    return request
+  }
+
+  private async commitCompaction(
+    messages: ModelMessage[], abortSignal: AbortSignal, event: Extract<CoreEvent, { type: 'context-compacted' }>,
+  ): Promise<void> {
+    abortSignal.throwIfAborted()
     await this.persistRequired((recorder) =>
-      recorder.recordSnapshot('compact', messages, this.activeTurn!.id, this.taskPlan?.stateSnapshot),
+      recorder.recordSnapshot('compact', messages, this.activeTurn?.id, this.taskPlan?.stateSnapshot, event),
       '保存上下文压缩',
     )
     carryPendingQuestions(messages, this.messages)
     this.messages = messages
     this.rebuildActivePdfAttachments()
     this.tokenBaseline = null
-    const request = await this.prepareRequestContext(abortSignal)
-    this.options.emit({
-      type: 'context-compacted', level, preTokens, postTokens: request.usedTokens,
-    })
-    this.emitContextUsage(request.messages, request.usedTokens)
-    return request
+    this.options.emit(event)
   }
 
   private recordAutoCompactFailure(): void {
@@ -2335,24 +2332,25 @@ export class AgentSession {
   private estimateCurrentContextTokens(
     messages: ModelMessage[] = this.messages,
     requestProjectionDelta?: number,
+    baseline = this.tokenBaseline,
   ): number {
     const fallbackOverheadTokens = this.contextOverhead
       ? this.contextOverhead.systemPromptTokens + this.contextOverhead.toolTokens
       : 0
     const rawEstimate = estimateContextTokens(
       messages,
-      this.tokenBaseline,
+      baseline,
       fallbackOverheadTokens,
     )
     const projectionDelta = requestProjectionDelta
       ?? estimateMessagesTokens(this.projectContextMessages(messages)) - estimateMessagesTokens(messages)
     const baselineProjection = requestProjectionDelta === undefined
-      ? this.tokenBaseline?.projectionDelta
-      : this.tokenBaseline?.requestProjectionDelta
+      ? baseline?.projectionDelta
+      : baseline?.requestProjectionDelta
     return Math.max(
       0,
       rawEstimate + projectionDelta - (baselineProjection ?? 0)
-        + (this.tokenBaseline ? fallbackOverheadTokens - this.tokenBaseline.overheadTokens : 0),
+        + (baseline ? fallbackOverheadTokens - baseline.overheadTokens : 0),
     )
   }
 
@@ -2370,13 +2368,15 @@ export class AgentSession {
     ))
   }
 
-  private async prepareRequestContext(abortSignal: AbortSignal): Promise<PreparedRequestContext> {
+  private async prepareRequestContext(
+    abortSignal: AbortSignal, history = this.messages, baseline = this.tokenBaseline,
+  ): Promise<PreparedRequestContext> {
     abortSignal.throwIfAborted()
     const subagentCatalogReminder = this.subagentCatalog
-      ? subagentCatalogUpdate(this.messages, this.subagentCatalog) : null
-    const dateReminder = currentDateReminder(this.messages, new Date())
+      ? subagentCatalogUpdate(history, this.subagentCatalog) : null
+    const dateReminder = currentDateReminder(history, new Date())
     const persistentMessages = [
-      ...this.messages,
+      ...history,
       ...(subagentCatalogReminder ? [subagentCatalogReminder] : []),
       ...(dateReminder ? [dateReminder] : []),
     ]
@@ -2396,7 +2396,7 @@ export class AgentSession {
       messages,
       projectionDelta: estimateMessagesTokens(this.projectContextMessages(persistentMessages)) - persistentTokens,
       requestProjectionDelta,
-      usedTokens: this.estimateCurrentContextTokens(persistentMessages, requestProjectionDelta),
+      usedTokens: this.estimateCurrentContextTokens(persistentMessages, requestProjectionDelta, baseline),
     }
   }
 

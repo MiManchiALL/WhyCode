@@ -461,7 +461,7 @@ html[data-wc-panel-resizing='true']::after {
   color: var(--wc-sage-ink);
 }
 
-.wc-compaction-summary:hover:not(:disabled) {
+button.wc-compaction-summary:hover:enabled {
   background: color-mix(in srgb, var(--wc-sage) 86%, var(--wc-sage-ink));
 }
 
@@ -1653,10 +1653,26 @@ html[data-wc-panel-resizing='true']::after {
   text-decoration-color: currentColor;
 }
 
-.wc-markdown .wc-file-link:hover,
-.wc-markdown .wc-file-link:focus-visible {
+.wc-markdown .wc-document-web-link {
+  padding-inline-start: 0.45em;
+  color: var(--wc-blue-ink);
+  text-decoration: none;
+}
+
+.wc-document-web-link::before {
+  content: none;
+}
+
+.wc-markdown :is(.wc-file-link, .wc-document-web-link):is(:hover, :focus-visible) {
   border-color: var(--wc-blue-ink);
   background: var(--wc-blue);
+}
+
+.wc-markdown :is(.wc-file-link, .wc-web-link) [data-streamdown='inline-code'] {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
 }
 
 .wc-site-icon {
