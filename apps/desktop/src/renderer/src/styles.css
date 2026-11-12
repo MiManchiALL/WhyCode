@@ -2023,6 +2023,24 @@ button.wc-compaction-summary:hover:enabled {
   animation: wc-conversation-leave 0s 250ms forwards;
 }
 
+/* 只合成视口大小的色层，长历史保留原有布局和离屏渲染。 */
+.wc-conversation-reveal {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wc-conversation-reveal {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--wc-surface) 82%, transparent);
+    opacity: 0;
+    animation: wc-fade-out 180ms ease-out;
+  }
+}
+
 @keyframes wc-conversation-leave {
   to { visibility: hidden; }
 }

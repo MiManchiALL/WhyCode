@@ -2444,16 +2444,6 @@ export function App() {
                   ref={conversationContentRef}
                   className="wc-conversation-content wc-conversation-balanced-content mx-auto w-full max-w-4xl"
                 >
-                  {!loadingConversation && !conversationStarted && !pendingMessage && (
-                    <div className="mx-auto mt-[18vh] max-w-md text-center">
-                      <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
-                      <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
-                        {explicitProjectSelected
-                          ? '描述目标，WhyCode 会在当前工作区中读取、修改和验证。'
-                          : '先选择一个项目，或直接在默认工作区中开始。'}
-                      </p>
-                    </div>
-                  )}
                   <MarkdownNavigation baseDir={projectDir} onOpenFile={openFilePreview}>
                     <ConversationView
                       remote={workspace.mode === 'ssh'}
@@ -2462,6 +2452,16 @@ export function App() {
                       pendingSessionId={loadingConversation ? resumingSessionId : null}
                       onReady={restoreConversationAfterRender}
                       active={resumingSessionId === null}
+                      emptyState={!conversationStarted && !pendingMessage && (
+                        <div className="mx-auto mt-[18vh] max-w-md text-center">
+                          <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
+                          <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
+                            {explicitProjectSelected
+                              ? '描述目标，WhyCode 会在当前工作区中读取、修改和验证。'
+                              : '先选择一个项目，或直接在默认工作区中开始。'}
+                          </p>
+                        </div>
+                      )}
                       items={btwPresentation.items}
                       latestBtwConversationId={btwPresentation.latestBtwConversationId}
                       expandedIds={view.expanded}
@@ -2488,6 +2488,7 @@ export function App() {
                         <WorktreePreparation baseRef={worktreePreparation.baseRef} />
                       )}
                       {thinkingGapVisible && <ThinkingGapIndicator />}
+                      {runtimeId && <span key={runtimeId} aria-hidden="true" className="wc-conversation-reveal" />}
                     </ConversationView>
                   </MarkdownNavigation>
                 </div>

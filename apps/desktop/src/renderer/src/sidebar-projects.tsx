@@ -8,7 +8,7 @@ import { NameEditorDialog } from './name-editor.tsx'
 import { useSidebarGroupCollapsed } from './sidebar-collapse.ts'
 import { SettingsButton } from './settings-layout.tsx'
 
-const PROJECT_SESSION_PREVIEW_LIMIT = 4
+const PROJECT_SESSION_PREVIEW_LIMIT = 3
 
 interface SidebarProjectsProps {
   projects: readonly SidebarProject[]
