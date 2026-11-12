@@ -2018,11 +2018,6 @@ button.wc-compaction-summary:hover:enabled {
     wc-session-loading-shine 3s 250ms ease-in-out infinite;
 }
 
-/* 快速切换保留原来的只读画面；慢切换在同一时刻交给加载提示。 */
-.wc-conversation-leaving {
-  animation: wc-conversation-leave 0s 250ms forwards;
-}
-
 /* 只合成视口大小的色层，长历史保留原有布局和离屏渲染。 */
 .wc-conversation-reveal {
   display: none;
@@ -2039,10 +2034,6 @@ button.wc-compaction-summary:hover:enabled {
     opacity: 0;
     animation: wc-fade-out 180ms ease-out;
   }
-}
-
-@keyframes wc-conversation-leave {
-  to { visibility: hidden; }
 }
 
 @keyframes wc-session-loading-reveal {
