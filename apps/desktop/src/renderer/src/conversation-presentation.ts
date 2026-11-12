@@ -1,4 +1,5 @@
 import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
+import type { ToolFileChange } from '@whycode/core/events'
 
 export interface ScrollMetrics {
   scrollTop: number
@@ -22,14 +23,16 @@ export interface ConversationScrollAnchor {
 const BOTTOM_THRESHOLD_PX = 60
 const MAX_CACHED_CONVERSATIONS = 32
 const MAX_BLOCK_PREFERENCES = 256
+const MAX_FILE_CHANGE_ROWS = 256
 
-interface ConversationPresentation {
+export interface ConversationPresentation {
   expandedOverrides: Map<string, boolean>
   mermaidSources?: ReadonlySet<string>
   queuedMessagesCollapsed?: boolean
   scroll?: ConversationScrollPosition
   historyStart?: string
   workspacePosition?: WorkspaceBrowserPosition
+  fileChanges?: Map<string, ToolFileChange[]>
 }
 
 export class ConversationPresentationCache {
@@ -61,6 +64,24 @@ export class ConversationPresentationCache {
     const previous = this.entries.get(key)
     if (!previous && !workspacePosition) return
     this.set(key, { ...previous, expandedOverrides: previous?.expandedOverrides ?? new Map(), workspacePosition })
+  }
+
+  saveFileChanges(key: string, checkpoints: string, changes: ToolFileChange[]): void {
+    // 一份摘要只含路径与增删行数。按会话限制总行数，空摘要也占一个位置。
+    const previous = this.entries.get(key)
+    const size = Math.max(1, changes.length)
+    if (size > MAX_FILE_CHANGE_ROWS) return
+    const summaries = previous?.fileChanges ?? new Map<string, ToolFileChange[]>()
+    summaries.delete(checkpoints)
+    summaries.set(checkpoints, changes)
+    let total = 0
+    for (const rows of summaries.values()) total += Math.max(1, rows.length)
+    for (const [id, rows] of summaries) {
+      if (total <= MAX_FILE_CHANGE_ROWS) break
+      summaries.delete(id)
+      total -= Math.max(1, rows.length)
+    }
+    this.set(key, { ...previous, expandedOverrides: previous?.expandedOverrides ?? new Map(), fileChanges: summaries })
   }
 
   setQueuedMessagesCollapsed(key: string, collapsed: boolean): void {

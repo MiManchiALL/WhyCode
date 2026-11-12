@@ -5,6 +5,7 @@ import type { Presentation } from '@whycode/core/presentation'
 import { applyCoreEvent, createConversationState, type Block, type ToolCall } from '../../shared/conversation-state.ts'
 import { conversationSections } from '../../shared/conversation-sections.ts'
 import { copyResponseText, responsePresentationResult, responseSources } from './response-presentation.ts'
+import { prepareBottomFileChanges } from './response-file-changes-data.ts'
 
 const declaration: Presentation = {
   files: [{ path: 'C:/work/index.html', description: '网页成品' }],
@@ -27,6 +28,29 @@ function responseEvents(id: string, present: boolean): ViewEvent[] {
 }
 
 describe('最终回答的交付投影', () => {
+  it('贴底导航在首帧前交付最后一张改动卡，中间阅读位置和已缓存摘要跳过读取', async (t) => {
+    const end = (id: string): Block => ({ kind: 'work-duration', id, forkTurnId: id, durationMs: 5, outcome: 'completed' })
+    const final = (id: string): Block => ({ kind: 'text', id, phase: 'final', text: '已完成' })
+    const blocks: Block[] = [
+      block({ ...call, checkpointId: 'a' }), final('1'), end('1'),
+      block({ ...call, checkpointId: 'b' }), block({ ...call, checkpointId: 'c' }), final('2'), end('2'),
+      final('3'), end('3'), { kind: 'compaction', id: 'compact', index: 1, status: 'completed', preTokens: 20, postTokens: 5 },
+    ]
+    const changes = [{ path: 'result.ts', added: 3, removed: 0 }]
+    const read = t.mock.fn(async () => ({ ok: true, changes }))
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { whycode: { checkpointFileChanges: read } } })
+    t.after(() => {
+      if (previous) Object.defineProperty(globalThis, 'window', previous)
+      else Reflect.deleteProperty(globalThis, 'window')
+    })
+    const presentation = { expandedOverrides: new Map<string, boolean>() }
+    assert.deepEqual(await prepareBottomFileChanges('target', blocks, undefined), { checkpoints: 'b,c', state: { status: 'ready', changes } })
+    assert.equal(await prepareBottomFileChanges('target', blocks, { ...presentation, fileChanges: new Map([['b,c', []]]) }), undefined)
+    assert.equal(await prepareBottomFileChanges('target', blocks, { ...presentation, scroll: { atBottom: false, scrollTop: 120 } }), undefined)
+    assert.deepEqual(read.mock.calls.map(call => call.arguments), [[{ runtimeId: 'target', checkpointIds: ['b', 'c'] }]])
+  })
+
   it('金额、明确公式和引用共用语法边界，复制保留金额原文', () => {
     const text = '价格 **$42 输入**（即 $0.042/M）；公式 \\(x+1\\)2；[定价](https://example.com/pricing "whycode:source")。'
     const response = responseSources([text])

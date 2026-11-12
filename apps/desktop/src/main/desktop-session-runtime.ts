@@ -24,6 +24,7 @@ import type {
   RuntimeWorkspace,
 } from '../shared/workspace.ts'
 import { UserMessageRoutingGate } from './user-message-routing.ts'
+import type { RuntimeCommandResult } from '../shared/session.ts'
 import { ViewTimeline } from './view-timeline.ts'
 
 export interface DesktopSessionRuntimeOptions {
@@ -72,6 +73,7 @@ export class DesktopSessionRuntime {
   private readonly pendingApprovals = new Map<string, PendingApproval>()
   private readonly idleWaiters = new Set<() => void>()
   private attachmentAbort: AbortController | null = null
+  private compactionPreparation: AbortController | null = null
   /** 子代理等宿主拥有的异步工作；阻止卸载/删除，但不占用户会话并发名额。 */
   private externalWorkCount = 0
   private disposed = false
@@ -330,6 +332,36 @@ export class DesktopSessionRuntime {
     this.notifyStateChanged()
   }
 
+  async compact(prepare: () => Promise<string | null>): Promise<RuntimeCommandResult> {
+    if (this.userRunBusy) return { ok: false, error: 'Agent 工作中，请先停止再压缩' }
+    if (!this.session && !this.journal) return { ok: false, error: '还没有对话，无需压缩' }
+    const reservation = this.routingGate.reserve()
+    const preparation = new AbortController()
+    this.compactionPreparation = preparation
+    const compactionId = randomUUID()
+    this.emit({ type: 'agent-status', status: 'working' })
+    this.emit({ type: 'context-compaction', compactionId, status: 'running' })
+    let compacting: Promise<void>
+    try {
+      const error = await prepare()
+      preparation.signal.throwIfAborted()
+      if (error || !this.session) throw new Error(error ?? '会话尚未就绪')
+      compacting = this.session.compactNow(compactionId)
+    } catch (error) {
+      const stopped = preparation.signal.aborted
+      this.emit({ type: 'context-compaction', compactionId, status: stopped ? 'stopped' : 'failed' })
+      this.emit({ type: 'agent-status', status: 'idle' })
+      return stopped ? { ok: true } : { ok: false, error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      this.compactionPreparation = null
+      reservation.release()
+      this.notifyStateChanged()
+    }
+    // Agent 已同步接手，后续用户输入可以排队，无需等摘要请求返回。
+    await compacting
+    return { ok: true }
+  }
+
   waitUntilIdle(): Promise<void> {
     if (!this.busy) return Promise.resolve()
     return new Promise((resolve) => this.idleWaiters.add(resolve))
@@ -410,6 +442,7 @@ export class DesktopSessionRuntime {
     if (source === 'user' && this.workStartedAt !== null) this.workOutcome = 'stopped'
     const reason = source === 'user' ? 'user-cancel' : 'process-interruption'
     this.attachmentAbort?.abort(reason)
+    this.compactionPreparation?.abort(reason)
     this.rejectApprovals()
     // 首次消息可能仍在准备或持久化；等输入交付边界后，停止才会作用于它的 Agent。
     await this.routingGate.waitUntilDelivered()

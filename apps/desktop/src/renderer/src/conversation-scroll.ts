@@ -39,14 +39,29 @@ export function restoreConversationScrollPosition(
   position: ConversationScrollPosition,
   scroller: HTMLElement,
 ): ConversationScrollRestoration {
-  const savedAnchor = position.atBottom ? undefined : position.anchor
+  if (position.atBottom) {
+    // Chromium 可能还在用离屏占位高度。只展开能落在末屏内的段，先定稿几何再定位。
+    const measured: MaterializedSection[] = []
+    const sections = scroller.querySelectorAll<HTMLElement>(SECTION_SELECTOR)
+    for (let i = sections.length - 1; i >= 0; i--) {
+      const section = sections[i]!
+      const end = section.getBoundingClientRect().bottom - scroller.getBoundingClientRect().top + scroller.scrollTop
+      if (scroller.scrollHeight - end >= scroller.clientHeight) break
+      materializeSection(section, measured)
+    }
+    const scrollTop = maximumScrollTop(scroller)
+    scroller.scrollTop = scrollTop
+    // 末屏首次绘制前若恢复 auto，Chromium 仍可跳过其中的正文。
+    return { position: { atBottom: true, scrollTop }, release: () => releaseMaterializedSections(measured) }
+  }
+  const savedAnchor = position.anchor
   const section = savedAnchor
     ? findByDataValue(scroller, SECTION_SELECTOR, 'conversationScrollSection', savedAnchor.sectionId)
     : null
   if (!savedAnchor || !section) {
     const scrollTop = restoredScrollTop(position, scroller)
     scroller.scrollTop = scrollTop
-    return { position: position.atBottom ? { atBottom: true, scrollTop } : captureScrollPosition(scroller), release: noop }
+    return { position: captureScrollPosition(scroller), release: noop }
   }
 
   const materialized = materializeSectionsThrough(scroller, section)

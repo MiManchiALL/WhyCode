@@ -8,6 +8,24 @@ import {
 } from './conversation-scroll.ts'
 
 describe('会话滚动锚定', () => {
+  it('贴底首帧使用末轮的实际高度，只物化可见的工作段', () => {
+    const { document } = parseHTML('<main><section class="wc-completed-work-section" data-conversation-scroll-section="a"></section><section class="wc-completed-work-section" data-conversation-scroll-section="b"></section></main>')
+    const scroller = document.querySelector<HTMLElement>('main')!
+    const [older, last] = [...scroller.querySelectorAll<HTMLElement>('section')] as [HTMLElement, HTMLElement]
+    const height = () => hasStableBlockSize(last) ? 1_200 : 280
+    const top = defineScrollerMetrics(scroller, 0, () => 600 + height(), 400)
+    defineTop(scroller, 0)
+    older.getBoundingClientRect = () => rectangle(-top(), 600)
+    last.getBoundingClientRect = () => rectangle(600 - top(), height())
+    const restored = restoreConversationScrollPosition({ atBottom: true, scrollTop: 0 }, scroller)
+    assert.equal(scroller.scrollTop, 1_400)
+    assert.equal(last.style.getPropertyValue('content-visibility'), 'visible')
+    assert.equal(older.style.getPropertyValue('content-visibility'), '')
+    restored.release()
+    assert.equal(last.style.getPropertyValue('content-visibility'), '')
+    assert.equal(scroller.scrollTop, 1_400)
+  })
+
   it('恢复贴底时保留实际定位的底部，即使离屏内容在设置 scrollTop 后展开', () => {
     const { document } = parseHTML('<main></main>')
     const scroller = document.querySelector<HTMLElement>('main')!

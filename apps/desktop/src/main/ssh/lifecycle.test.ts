@@ -40,17 +40,16 @@ for (const failFirst of [false, true]) it(`同一服务器并发删除，慢任�
   const started = new Promise<void>(resolve => { signalStarted = resolve })
   const blocked = new Promise<void>(resolve => { unblock = resolve })
   const withFiles = env.connections.withFiles.bind(env.connections)
-  t.mock.method(env.connections, 'withFiles', ((id, operation, target) => withFiles(id, (fs, home, client) => operation({
-    ...fs,
-    rm: async (path, options) => {
-      if (path.endsWith(`/${first.sessionId}`)) {
-        signalStarted()
-        await blocked
-        if (failFirst) throw new Error('模拟慢连接失败')
-      }
-      await fs.rm(path, options)
-    },
-  }, home, client), target)) satisfies SshConnections['withFiles'])
+  let firstConnection = true
+  t.mock.method(env.connections, 'withFiles', ((id, operation, target) => withFiles(id, async (fs, home, client) => {
+    if (firstConnection) {
+      firstConnection = false
+      signalStarted()
+      await blocked
+      if (failFirst) throw new Error('模拟慢连接失败')
+    }
+    return operation(fs, home, client)
+  }, target)) satisfies SshConnections['withFiles'])
   const remove = async (sessionId: string) => {
     const deletion = await stageSessionDeletion({ sessionId, sessions, scratch,
       commandSessions: { removeSession: async () => {} },
@@ -73,7 +72,8 @@ for (const failFirst of [false, true]) it(`同一服务器并发删除，慢任�
   assert.equal(await readFile(join(env.root, 'project/keep.txt'), 'utf8'), 'project data')
   if (failFirst) assert.equal((await sessions.list())[0]?.resumable, true)
   else await assert.rejects(access(parent), { code: 'ENOENT' })
-  assert.equal(env.commands.length, 0)
+  assert.deepEqual(env.commands, (failFirst ? [second] : [second, first]).map(journal =>
+    `rm -rf -- '${env.remoteRoot}/.cache/whycode-scratch/${journal.sessionId}'`))
 })
 
 it('并发删除最后两个远端临时目录后移除空根目录', { timeout: 15_000 }, async t => {
@@ -121,7 +121,7 @@ it('删除 SSH 会话清理自己的远端与本地临时文件，保留项目�
   await access(join(env.root, 'sessions', other.sessionId, 'transcript.jsonl'))
   for (const file of keep) assert.equal(await readFile(file, 'utf8'), 'keep')
   await env.workspaces.removeScratch(journal.sessionId, env.workspace)
-  assert.equal(env.commands.length, 0)
+  assert.deepEqual(env.commands, Array(2).fill(`rm -rf -- '${env.remoteRoot}/.cache/whycode-scratch/${journal.sessionId}'`))
   assert.equal(env.connections.isConnected(env.id), false)
 })
 
@@ -187,7 +187,7 @@ it('重新添加并验证同一服务器的配置后，旧会话可直接清理�
   await env.store.trust(replacement.id, env.fingerprint)
   await env.workspaces.removeScratch(sessionId, env.workspace)
   await assert.rejects(access(remoteScratch), { code: 'ENOENT' })
-  assert.equal(env.commands.length, 0)
+  assert.deepEqual(env.commands, [`rm -rf -- '${env.remoteRoot}/.cache/whycode-scratch/${sessionId}'`])
   assert.equal(env.connections.isConnected(replacement.id), false)
 })
 

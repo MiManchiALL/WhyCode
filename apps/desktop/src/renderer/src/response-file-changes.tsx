@@ -3,14 +3,14 @@ import { useState } from 'react'
 import type { Block } from '../../shared/conversation-state.ts'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { ChangeCounts, ChangedFilePath } from './file-change-summary.tsx'
-import { useResponseFileChanges, totalFileChanges } from './response-file-changes-data.ts'
+import { responseCheckpointIds, useResponseFileChanges, totalFileChanges } from './response-file-changes-data.ts'
 
 export function ResponseFileChanges({ runtimeId, projectDir, activity, onOpenChanges, onRevealRestore }: {
   runtimeId: string; projectDir: string | null; activity: readonly Block[]
   onOpenChanges?: (page: Extract<RightPanelPage, { kind: 'changes' }>) => void
   onRevealRestore?: () => void
 }) {
-  const checkpointIds = activity.flatMap(block => block.kind === 'tool' && block.call.checkpointId ? [block.call.checkpointId] : [])
+  const checkpointIds = responseCheckpointIds(activity)
   const state = useResponseFileChanges(runtimeId, checkpointIds)
   const [expanded, setExpanded] = useState(false)
   if (state.status === 'error') return <p role="status" className="py-2 text-xs text-[var(--wc-muted)]">{state.message}</p>

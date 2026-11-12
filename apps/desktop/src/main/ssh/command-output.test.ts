@@ -48,7 +48,7 @@ it('SSH 日志通过真实 SFTP 连续落盘并随所属会话清理，不创建
   for (const path of logs) assert.equal(await readFile(join(env.root, path.slice(env.remoteRoot.length)), 'utf8'), text)
   await new SshWorkspaces(env.connections).removeScratch(sessionId, workspace)
   await assert.rejects(access(join(env.root, '.cache/whycode-scratch', sessionId)), { code: 'ENOENT' })
-  assert.equal(env.commands.length, 0)
+  assert.deepEqual(env.commands, [`rm -rf -- '${env.remoteRoot}/.cache/whycode-scratch/${sessionId}'`])
 })
 
 it('真实 Linux 命令的双流 UTF-8 大日志经 ACK 背压完整落盘且可分页读取', {

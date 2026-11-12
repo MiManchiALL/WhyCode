@@ -37,10 +37,10 @@ const LINK_SAFETY = { enabled: false } as const
 
 const FileLinkContext = createContext<FileLinkNavigation | null>(null)
 
-export function MarkdownNavigation({ baseDir, onOpenFile, onOpenWeb, children }: Omit<FileLinkNavigation, 'baseDir'> & {
+export function MarkdownNavigation({ baseDir, onOpenFile, children }: Omit<FileLinkNavigation, 'baseDir'> & {
   baseDir: string | null; children: ReactNode
 }) {
-  const value = useMemo(() => baseDir ? { baseDir, onOpenFile, onOpenWeb } : null, [baseDir, onOpenFile, onOpenWeb])
+  const value = useMemo(() => baseDir ? { baseDir, onOpenFile } : null, [baseDir, onOpenFile])
   return <FileLinkContext value={value}>{children}</FileLinkContext>
 }
 
@@ -130,30 +130,22 @@ function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-cit
   }
   const sourceUrl = normalizeSourceUrl(href)
   const source = citationUrl ? response?.sources.find(source => source.url === citationUrl) : undefined
-  const openWeb = navigation?.onOpenWeb
-  const siteOrigin = sourceUrl && (!citationUrl || openWeb) ? new URL(sourceUrl).origin : null
+  const siteOrigin = sourceUrl && !source ? new URL(sourceUrl).origin : null
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event)
     if (event.defaultPrevented || !sourceUrl) return
     if (source) {
       event.preventDefault()
       onSourceClick(sourceUrl)
-    } else if (openWeb) {
-      event.preventDefault()
-      openWeb(sourceUrl)
     }
   }
   return <MarkdownAnchor
     {...props}
-    className={sourceUrl && openWeb ? 'wc-path-reference wc-document-web-link' : props.className}
     href={href}
     inlineSource={!!source}
     webLink={!!siteOrigin}
-    {...(sourceUrl ? { 'data-source-url': sourceUrl, target: openWeb ? undefined : '_blank', rel: 'noreferrer noopener' } : {})}
+    {...(sourceUrl ? { 'data-source-url': sourceUrl, target: '_blank', rel: 'noreferrer noopener' } : {})}
     onClick={handleClick}
-    onAuxClick={openWeb && sourceUrl ? event => {
-      if (event.button === 1) { event.preventDefault(); openWeb(sourceUrl) }
-    } : props.onAuxClick}
     title={source ? `跳转到来源：${source.title}` : props.title === WEB_SOURCE_CITATION_MARKER ? undefined : props.title}
   >
     {source ? <>

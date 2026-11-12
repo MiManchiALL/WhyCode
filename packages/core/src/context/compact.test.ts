@@ -21,6 +21,20 @@ const state = (historySummary: string | null, turnPrefixSummary: string | null =
   createCompactSummaryMessage({ historySummary, turnPrefixSummary, turnId })
 
 describe('按预算划分历史与当前正式 turn', () => {
+  it('自动摘要在输入准备成功后才发布请求进度', async () => {
+    const model = summaryModel(['摘要'])
+    const messages = [root('A'), assistant('任务进度'), tail]
+    let requests = 0
+    const onSummaryRequest = () => { requests++ }
+    await assert.rejects(compact(model, messages, {
+      onSummaryRequest, prepareMessagesForModel: () => { throw new Error('输入准备失败') },
+    }), /输入准备失败/)
+    assert.equal(requests, 0)
+    assert.equal(model.doGenerateCalls.length, 0)
+    await compact(model, messages, { onSummaryRequest })
+    assert.equal(requests, 1)
+    assert.equal(model.doGenerateCalls.length, 1)
+  })
   it('尾部为可用输入预算的 16%，不受工具次数影响', () => {
     assert.equal(compactTailBudget(capabilities), 17_280)
     assert.equal(compactTailBudget({ contextWindow: 200_000, maxOutput: 64_000 }), 28_800)

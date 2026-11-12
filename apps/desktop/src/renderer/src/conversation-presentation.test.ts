@@ -170,4 +170,17 @@ describe('会话展示偏好', () => {
     assert.equal(cache.size, 32)
     assert.equal(cache.get('a'), undefined)
   })
+
+  it('切回时按会话和检查点复用改动摘要，按文件数淘汰并随会话释放', () => {
+    const cache = new ConversationPresentationCache()
+    const changes = [{ path: 'first.ts', added: 1, removed: 0 }]
+    cache.saveFileChanges('a', 'first', changes)
+    cache.saveFileChanges('b', 'first', [])
+    assert.equal(cache.get('a')?.fileChanges?.get('first'), changes)
+    assert.deepEqual(cache.get('b')?.fileChanges?.get('first'), [])
+    cache.saveFileChanges('a', 'large', Array.from({ length: 256 }, (_, i) => ({ ...changes[0]!, path: `${i}.ts` })))
+    assert.deepEqual([...cache.get('a')!.fileChanges!.keys()], ['large'])
+    cache.delete('a')
+    assert.equal(cache.get('a'), undefined)
+  })
 })
