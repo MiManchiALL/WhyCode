@@ -20,12 +20,12 @@ function codePoint(root: HTMLElement, node: Node, offset: number): CodePoint | n
   return { row: Number(row.dataset.codeRow), offset: column }
 }
 
-export function readCodeRange(root: HTMLElement): CodeRange | null {
+export function readCodeRange(root: HTMLElement, includeCaret = false): CodeRange | null {
   const selection = root.ownerDocument.getSelection()
-  if (!selection?.rangeCount || selection.isCollapsed) return null
+  if (!selection?.rangeCount || (selection.isCollapsed && !includeCaret)) return null
   const range = selection.getRangeAt(0)
   const start = codePoint(root, range.startContainer, range.startOffset)
-  const end = codePoint(root, range.endContainer, range.endOffset)
+  const end = range.collapsed ? start : codePoint(root, range.endContainer, range.endOffset)
   if (!start || !end) return null
   return { start, end, backward: selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset }
 }

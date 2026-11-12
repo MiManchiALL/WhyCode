@@ -44,8 +44,8 @@ export function SyntaxCode({
 
   useLayoutEffect(() => {
     const root = body.current!
-    // Worker 着色会替换文本节点。仅恢复替换前仍存在的原生选区，保留拖选方向。
-    const selection = previousLines.current === lines ? readCodeRange(root) : null
+    // Worker 着色会替换文本节点。刚按下时的光标也是原生拖选的起点。
+    const selection = previousLines.current === lines ? readCodeRange(root, true) : null
     previousLines.current = lines
     root.innerHTML = renderCodeLines(lines, highlighted)
     if (selection) selectCodeRange(root, selection)

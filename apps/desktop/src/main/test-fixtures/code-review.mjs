@@ -66,14 +66,15 @@ app.whenReady().then(async () => {
     }
     throw Error('column outside fixture')
   })()`)
-  const drag = async (from, to) => {
+  const drag = async (from, to, expectedText, afterPress) => {
     stage = 'native drag from ' + JSON.stringify(from) + ' to ' + JSON.stringify(to)
     await mouse('mouseMoved', from)
     await mouse('mousePressed', from, true)
     await until(element('[data-line-focus]'), 'pressed code line is marked')
+    await afterPress?.()
     await mouse('mouseMoved', { x: from.x + 7, y: from.y }, true)
     await mouse('mouseMoved', to, true)
-    await until('!getSelection().isCollapsed && !document.querySelector("[data-line-focus]")', 'drag replaces the grey line with a text selection')
+    await until(`getSelection().toString() === ${JSON.stringify(expectedText)} && !document.querySelector("[data-line-focus]")`, 'drag reaches the requested text')
     await mouse('mouseReleased', to)
     await until('document.querySelector(".wc-code-selection-menu")', 'manual selection offers actions')
   }
@@ -137,10 +138,11 @@ app.whenReady().then(async () => {
     await jump()
     assert.equal(await run('document.querySelector("#tab-count").textContent'), '1')
     const from = await pointInCode(63, 6), to = await pointInCode(64, 14)
-    await drag(from, to)
+    const sourceExcerpt = 'first = 1;\n  const second'
+    await drag(from, to, sourceExcerpt)
     await clicked(await center('.wc-code-selection-menu button:first-child'))
     await until(element('[aria-label="1 段选中代码"]'), 'selection enters composer')
-    await drag(to, from)
+    await drag(to, from, sourceExcerpt)
     await clicked(await center('.wc-code-selection-menu button:last-child'))
     await until('document.activeElement?.tagName === "TEXTAREA"', 'comment editor focused')
     stage = 'input comment'
@@ -159,7 +161,7 @@ app.whenReady().then(async () => {
     assert.equal(await run('getSelection().isCollapsed'), true)
     await mouse('mouseMoved', await center('[aria-label="1 条代码批注"]'))
     await until('document.querySelector(".wc-reference-list")?.innerText.includes("核对这两行")', 'hover shows the comment')
-    assert.equal(await run('document.querySelector(".wc-code-excerpt").textContent'), 'first = 1;\n  const second')
+    assert.equal(await run('document.querySelector(".wc-code-excerpt").textContent'), sourceExcerpt)
     await clicked(await center('#outside'))
     await reloadSession(2)
     await until('document.querySelector(".wc-code-note-marker")', 'unsent note restored from IndexedDB')
@@ -169,7 +171,7 @@ app.whenReady().then(async () => {
     await clicked(await center('#outside'))
     await clicked(await center('#submit'))
     const message = await run('sessionStorage.getItem("sent")')
-    for (const value of ['文件：/project/sample.ts', '工作区：/project', '行号：64–65', 'first = 1;\n  const second', '批注：核对这两行']) assert.ok(message.includes(value), value)
+    for (const value of ['文件：/project/sample.ts', '工作区：/project', '行号：64–65', sourceExcerpt, '批注：核对这两行']) assert.ok(message.includes(value), value)
     await until('!document.querySelector(".wc-code-note-marker, #composer .wc-reference-chip")', 'submission releases draft and gutter markers')
     const collapsed = async () => {
       await until(element('#message [aria-label="1 条代码批注"]'), 'sent note is a chip')
@@ -177,7 +179,7 @@ app.whenReady().then(async () => {
       assert.ok(!await run('document.querySelector("#message").innerText.includes("所选原文")'))
       await mouse('mouseMoved', await center('#message [aria-label="1 条代码批注"]'))
       await until('document.querySelector(".wc-reference-list")?.innerText.includes("核对这两行")', 'sent chip previews annotation')
-      assert.equal(await run('document.querySelector(".wc-code-excerpt").textContent'), 'first = 1;\n  const second')
+      assert.equal(await run('document.querySelector(".wc-code-excerpt").textContent'), sourceExcerpt)
       assert.equal(await run('document.querySelector("[aria-label=移除代码引用]")'), null)
       await clicked(await center('#outside'))
     }
@@ -193,7 +195,7 @@ app.whenReady().then(async () => {
     await clicked(await center('#message [aria-label="编辑消息"]'))
     await until('document.activeElement?.getAttribute("aria-label") === "编辑用户消息"', 'edit opens just the user text')
     assert.equal(await run('document.activeElement.textContent.trim()'), '')
-    assert.equal(await run('document.querySelector("#message button[type=submit]").disabled'), false)
+    await until(element('#message button[type=submit]:enabled'), 'reference-only edit is ready to send')
     await web.insertText('请核对这段')
     await mouse('mouseMoved', await center('#message [aria-label="1 段选中代码"]'))
     await until(element('[aria-label="移除代码引用"]'), 'editing allows removing a reference')
@@ -202,14 +204,25 @@ app.whenReady().then(async () => {
     await until('document.querySelector("#message .wc-user-message-text")?.textContent === "请核对这段"', 'edited prose displays without metadata')
     assert.equal(await run(element('#message [aria-label="1 段选中代码"]')), null)
     assert.ok((await run('sessionStorage.getItem("sent")')).includes('批注：核对这两行'))
+    // 让真实的差异着色恰好发生在按下和拖动之间。
+    await web.debugger.sendCommand('Target.setAutoAttach', {
+      autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'worker' }, { exclude: true }],
+    })
     await clicked(await center('#diff'))
     await until(element('[data-tone="removed"]'), 'diff ready')
-    await drag(await pointInCode(1, 4), await pointInCode(3, 2))
-    assert.ok(!await run('getSelection().toString().includes("new value")'))
+    await drag(await pointInCode(1, 4), await pointInCode(3, 2), 'value\nta', async () => {
+      const coloured = element('[data-tone="removed"] code span')
+      assert.equal(await run(coloured), null)
+      await web.debugger.sendCommand('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true })
+      await until(coloured, 'diff coloured while mouse is down')
+      assert.ok(await run(`${element('[data-tone="removed"] code')}.contains(getSelection().anchorNode)`), 'pressed caret stays on the removed line')
+    })
     await clicked(await center('.wc-code-selection-menu button:first-child'))
+    await until(element('#composer [aria-label="1 段选中代码"]'), 'diff selection enters composer')
     await clicked(await center('#submit'))
+    await until(element('#message [aria-label="1 段选中代码"]'), 'diff selection submitted')
     const diffMessage = await run('sessionStorage.getItem("sent")')
-    assert.ok(diffMessage.includes('变更前 (L)\n行号：2–3\n所选原文：\n```\nvalue\nta\n```'))
+    assert.ok(diffMessage.includes('变更前 (L)\n行号：2–3\n所选原文：\n```\nvalue\nta\n```'), diffMessage)
     console.log('code review passed')
   } finally { clearTimeout(timeout); win.destroy() }
   app.quit()
