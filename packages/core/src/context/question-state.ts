@@ -51,13 +51,6 @@ export function applyQuestionSkips(messages: ConversationMessage[], ids: readonl
   } }
 }
 
-export function answersPlanQuestion(pending: readonly PendingQuestion[], inputs: readonly ConversationMessage[], planId?: string): boolean {
-  return Boolean(planId && inputs.some(message => {
-    const reply = message.whycode?.questionReply
-    return reply?.some(item => item.answer !== null && pending.some(question => question.id === item.id && question.planId === planId))
-  }))
-}
-
 /** 压缩只携带仍待回答的题目，提问所在的整个旧回合可以正常移出尾部。 */
 export function carryPendingQuestions(messages: ModelMessage[], source: readonly ModelMessage[]): void {
   const last = messages.at(-1) as ConversationMessage | undefined

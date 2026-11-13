@@ -2,9 +2,9 @@ import type { AgentSession } from '../agent/session.ts'
 import { formatQuestionAnswer, type UserQuestionItem } from '../user-questions.ts'
 import { withQuestionBatch } from '../context/question-state.ts'
 
-export function questionResult(batch: { id: string; questions: UserQuestionItem[] }, planId: string | null) {
+export function questionResult(batch: { id: string; questions: UserQuestionItem[] }) {
   return withQuestionBatch({ role: 'tool', content: [{ type: 'tool-result', toolName: 'AskUserQuestion',
-    toolCallId: batch.id, output: { type: 'text', value: '问题已提交。' } }] }, { ...batch, ...(planId ? { planId } : {}) })
+    toolCallId: batch.id, output: { type: 'text', value: '问题已提交。' } }] }, batch)
 }
 
 export function answerFirstQuestion(session: AgentSession, answer: string) {

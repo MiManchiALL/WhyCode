@@ -104,12 +104,8 @@ function knownToolSummary(
       return arrayCount(input, 'questions', 'question', 'questions')
     case 'CreateTaskPlan':
       return arrayCount(input, 'items', 'milestone', 'milestones')
-    case 'ResumeTaskPlan':
-      return prefixed('plan ID', shortId(text(input, 'plan_id')))
     case 'UpdateTaskItem':
       return taskUpdateSummary(input)
-    case 'CloseTaskPlan':
-      return prefixed('plan ID', shortId(text(input, 'plan_id')))
     case 'Subagent':
       return parts(text(input, 'action'), text(input, 'name') || shortId(text(input, 'subagent_id')))
     case 'ToolSearch':

@@ -156,7 +156,7 @@ describe('按预算划分历史与当前正式 turn', () => {
 describe('全量摘要输入与手动压缩', () => {
   it('尚未回答的早期问题不固定整个历史，自动和手动压缩均可按 ID 恢复', async () => {
     const item = { header: '环境', question: '使用哪个环境？' }
-    const issue = questionResult({ id: 'early', questions: [item] }, null)
+    const issue = questionResult({ id: 'early', questions: [item] })
     for (const mode of ['auto', 'manual'] as const) {
       const messages = [root('A'), call('early', 'AskUserQuestion', { questions: [item] }), issue,
         assistant('工作记录'), root('B'), tail]
@@ -190,6 +190,7 @@ describe('全量摘要输入与手动压缩', () => {
   it('剥离可重建的规范、计划快照，但保留 Skill 独有资料、错误和操作结果', async () => {
     const messages: ModelMessage[] = [root('A'),
       createCompactApplicationContextMessage(['旧计划全文']),
+      { role: 'user', content: '<system-reminder>\n<whycode-task-progress version="1">\n旧进度提醒\n</whycode-task-progress>\n</system-reminder>' },
       call('skill-body', 'Skill', { skillId: 'example' }), result('skill-body', 'SKILL_BODY_UNIQUE', 'Skill'),
       call('reference', 'Skill', { skillId: 'example', resourcePath: 'references/api-details.md' }),
       result('reference', '独有 API 参考资料', 'Skill'),
@@ -202,7 +203,7 @@ describe('全量摘要输入与手动压缩', () => {
     const model = summaryModel(['摘要'])
     await compact(model, messages, { mode: 'manual' })
     const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt)
-    assert.doesNotMatch(prompt, /旧计划全文|SKILL_BODY_UNIQUE|整份计划/)
+    assert.doesNotMatch(prompt, /旧计划全文|旧进度提醒|SKILL_BODY_UNIQUE|整份计划/)
     assert.match(prompt, /独有 API 参考资料/); assert.match(prompt, /资源不存在/); assert.match(prompt, /验证完成/)
     const quotedRule = root('B', '<system-reminder>\n<whycode-task-state schema-version="1">\n请修改此格式')
     assert.deepEqual(compactionConversation([quotedRule]), [quotedRule])

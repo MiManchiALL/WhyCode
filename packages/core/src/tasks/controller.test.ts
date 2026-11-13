@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { TaskPlanController } from './controller.ts'
-import { emptyTaskPlanState, taskItemSchema, taskPlanStateSchema } from './types.ts'
+import { taskItemSchema, taskPlanStateSchema } from './types.ts'
 
 const drafts = [
   { kind: 'work' as const, outcome: '核心能力已经可用' },
@@ -10,10 +10,10 @@ const drafts = [
 ]
 
 describe('Main 长任务计划控制器', () => {
-  it('严格拒绝旧版历史计划字段，不保留兼容结构', () => {
-    const legacyState = { ...emptyTaskPlanState(), historicalPlans: [] }
-
-    assert.equal(taskPlanStateSchema.safeParse(legacyState).success, false)
+  it('任务状态只投影当前版本和活动计划，并校验里程碑', () => {
+    const state = activeController().stateSnapshot
+    assert.deepEqual(Object.keys(state).sort(), ['activePlan', 'version'])
+    assert.equal(taskPlanStateSchema.safeParse({ ...state, version: -1 }).success, false)
     assert.equal(taskItemSchema.safeParse({
       id: 'T1',
       kind: 'work',
@@ -269,46 +269,19 @@ describe('Main 长任务计划控制器', () => {
     assert.deepEqual(controller.stateSnapshot, before)
   })
 
-  it('自然结束按完成度确定终态，终态不保存总结', () => {
-    const incomplete = activeController()
-    incomplete.beginStep()
-    assert.equal(incomplete.finishNaturalRun().ok, true)
-    assert.equal(incomplete.commitStep()?.plan.status, 'ended')
-    assert.equal(incomplete.snapshot, null)
-
+  it('自然收尾只结束已核验全部里程碑的计划', () => {
     const controller = activeController()
-    completeCurrent(controller, 'T1')
-    completeCurrent(controller, 'T2')
-    completeCurrent(controller, 'T3')
+    const before = controller.stateSnapshot
     controller.beginStep()
-    assert.equal(controller.finishNaturalRun().ok, true)
-    const commit = controller.commitStep()
+    controller.finishIfComplete()
+    assert.equal(controller.commitStep(), undefined)
+    assert.deepEqual(controller.stateSnapshot, before)
 
+    for (const id of ['T1', 'T2', 'T3']) completeCurrent(controller, id)
+    controller.beginStep()
+    controller.finishIfComplete()
+    assert.equal(controller.commitStep()?.plan.status, 'completed')
     assert.equal(controller.snapshot, null)
-    assert.equal(commit?.plan.status, 'completed')
-    assert.equal('summary' in (commit?.plan ?? {}), false)
-  })
-
-  it('硬中断后必须 Resume，恢复不会重写计划内容', () => {
-    const controller = activeController()
-    completeCurrent(controller, 'T1')
-    const items = controller.snapshot!.items
-    const planId = controller.snapshot!.id
-    assert.equal(controller.interrupt('user-cancel')?.resumeRequired, true)
-
-    controller.beginStep()
-    const rejected = controller.update([], {
-      itemId: 'T2', status: 'completed', evidence: ['调用已验证'],
-    })
-    assert.equal(rejected.ok, false)
-    assert.equal(rejected.ok ? null : rejected.error, 'resume_required')
-    assert.equal(controller.resume(planId).ok, true)
-    const commit = controller.commitStep()
-    assert.equal(commit?.state.resumeRequired, false)
-    assert.equal(commit?.state.interruptionReason, null)
-    assert.deepEqual(controller.snapshot?.items, items)
-    completeCurrent(controller, 'T2')
-    assert.equal(controller.snapshot?.items[2]?.status, 'in_progress')
   })
 
   it('结束旧计划与创建新计划必须跨稳定步骤', () => {
@@ -325,14 +298,30 @@ describe('Main 长任务计划控制器', () => {
     assert.equal(controller.snapshot?.goal, '新目标')
   })
 
-  it('已有活动计划时 Create 明确要求先处理当前计划', () => {
+  it('创建会原子替换活动计划，校验失败和步骤撤销保留旧计划', () => {
     const controller = activeController()
+    const previous = controller.stateSnapshot
     controller.beginStep()
-    const result = controller.create('另一个复杂任务', drafts)
+    const invalid = controller.create('新任务', drafts.slice(0, 2))
+    assert.equal(invalid.ok ? null : invalid.error, 'invalid_plan')
+    assert.equal(controller.commitStep(), undefined)
+    assert.deepEqual(controller.stateSnapshot, previous)
 
-    assert.equal(result.ok, false)
-    assert.equal(result.ok ? null : result.error, 'active_plan_exists')
-    assert.match(result.ok ? '' : result.message, /CloseTaskPlan/)
+    controller.beginStep()
+    assert.ok(controller.create('新任务', drafts).ok)
+    controller.discardStep()
+    assert.deepEqual(controller.stateSnapshot, previous)
+
+    controller.beginStep()
+    const created = controller.create('新任务', drafts)
+    const commit = controller.commitStep()!
+    assert.ok(created.ok)
+    assert.match(created.message, /^已建立 3 项宏观计划/)
+    assert.doesNotMatch(created.message, /替换|覆盖|旧计划/)
+    assert.equal(commit.plan.goal, '新任务')
+    assert.notEqual(commit.plan.id, previous.activePlan!.id)
+    assert.equal(commit.plan.revision, 1)
+    assert.equal(commit.state.version, previous.version + 1)
   })
 })
 

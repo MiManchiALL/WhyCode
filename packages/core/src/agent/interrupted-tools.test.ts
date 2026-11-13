@@ -246,9 +246,9 @@ describe('中断工具批次的执行事实', () => {
       { type: 'reasoning', text: '处理计划', providerOptions: { anthropic: { signature: 'signed-reasoning' } } }, ...calls,
     ] }
     await fixture.journal.recordStep(turnId, [head])
-    await fixture.journal.recordStep(turnId, [], undefined, undefined, { startedToolCallId: 'call-1' })
+    await fixture.journal.recordStep(turnId, [], undefined, { startedToolCallId: 'call-1' })
     await fixture.journal.recordStep(turnId, [toolResultMessage(calls[0]!, '确实完成')])
-    await fixture.journal.recordStep(turnId, [], undefined, undefined, { startedToolCallId: 'call-2' })
+    await fixture.journal.recordStep(turnId, [], undefined, { startedToolCallId: 'call-2' })
     const reopened = await fixture.store.open(fixture.journal.sessionId)
     assert.deepEqual(reopened.initialMessages[1], head)
     assert.deepEqual(toolResults(reopened.initialMessages).map((part) => part.output), [
@@ -293,7 +293,7 @@ describe('中断工具批次的执行事实', () => {
       const original = fixture.journal.recordStep.bind(fixture.journal)
       fixture.journal.recordStep = async (...args) => {
         if (boundary === 'calls' && args[1].some((m) => m.role === 'assistant')
-          || boundary === 'start' && args[4]?.startedToolCallId) throw new Error('磁盘写入失败')
+          || boundary === 'start' && args[3]?.startedToolCallId) throw new Error('磁盘写入失败')
         return original(...args)
       }
       const model = new MockLanguageModelV4({ doStream: [callsStep([['WriteFile', { path: 'first.txt', content: '不能写' }]])] })

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { isProjectInstructionsMessage } from '../instructions/project.ts'
 import {
   CLOSE_TASK_PLAN_TOOL_NAME, CREATE_TASK_PLAN_TOOL_NAME,
-  RESUME_TASK_PLAN_TOOL_NAME, UPDATE_TASK_ITEM_TOOL_NAME,
+  UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
 import { subagentDefinitionSnapshotSchema, type SubagentDefinitionCatalogSnapshot } from './types.ts'
 
@@ -54,8 +54,7 @@ function catalogEntries(snapshot: SubagentDefinitionCatalogSnapshot): CatalogEnt
     description: definition.description,
     Tools: [
       ...definition.toolNames,
-      CREATE_TASK_PLAN_TOOL_NAME, RESUME_TASK_PLAN_TOOL_NAME,
-      UPDATE_TASK_ITEM_TOOL_NAME, CLOSE_TASK_PLAN_TOOL_NAME,
+      CREATE_TASK_PLAN_TOOL_NAME, UPDATE_TASK_ITEM_TOOL_NAME, CLOSE_TASK_PLAN_TOOL_NAME,
     ],
   })).sort((left, right) => left.name.localeCompare(right.name))
 }

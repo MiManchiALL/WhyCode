@@ -163,7 +163,6 @@ const sessionStartSchema = chainedEntrySchema.extend({
 const turnStartSchema = chainedEntrySchema.extend({
   type: z.literal('turn-start'),
   turnId: z.string().min(1),
-  engagedPlanId: z.string().uuid().nullable(),
   /** 根输入不再是直接父节点时，仍以稳定 ID 原子确认其已经送达。 */
   rootInputId: entryIdSchema.optional(),
 })
@@ -338,8 +337,6 @@ const messagesEntrySchema = chainedEntrySchema.extend({
   pdfAttachments: pdfAttachmentsSchema.optional(),
   /** 与本批消息同一崩溃原子提交的权威任务状态；省略表示未变化。 */
   taskState: taskPlanStateSchema.optional(),
-  /** 本批稳定提交后的 execution run：省略表示不变，null 表示解除接合。 */
-  engagedPlanId: z.string().uuid().nullable().optional(),
   /** 与本批模型消息同一原子记录确认送达的忙时输入。 */
   deliveredInputIds: z.array(entryIdSchema).min(1).optional(),
   /** 执行入口已写稳；重启时据此区分未执行与结果未知。 */
@@ -400,7 +397,6 @@ const snapshotSchema = chainedEntrySchema.extend({
   reason: z.enum(['compact', 'rollback', 'recovery']),
   compaction: contextCompactedSchema.optional(),
   activeTurnId: z.string().min(1).nullable(),
-  activeTurnEngagedPlanId: z.string().uuid().nullable(),
   activeConsensusTaskId: z.string().min(1).nullable(),
   activeConsensusBaseMessages: messagesSchema.nullable(),
   activeConsensusBaseTaskState: taskPlanStateSchema.nullable(),
@@ -434,15 +430,6 @@ const snapshotSchema = chainedEntrySchema.extend({
   })
   if (snapshot.reason === 'compact' && snapshot.turnStarts.length > 0) {
     ctx.addIssue({ code: 'custom', path: ['turnStarts'], message: '压缩快照不能保留旧回合边界' })
-  }
-  if (snapshot.activeTurnEngagedPlanId && !snapshot.activeTurnId) {
-    ctx.addIssue({ code: 'custom', message: '没有 activeTurnId 时不能保留 engaged plan' })
-  }
-  if (
-    snapshot.activeTurnEngagedPlanId
-    && snapshot.activeTurnEngagedPlanId !== snapshot.taskState.activePlan?.id
-  ) {
-    ctx.addIssue({ code: 'custom', message: 'engaged plan 必须匹配 snapshot 的 active plan' })
   }
   snapshot.pendingUserInputs.forEach((input, inputIndex) => {
     input.attachments?.forEach((attachment, attachmentIndex) => {
@@ -577,7 +564,6 @@ export interface LoadedSession {
   entries: SessionEntry[]
   leafUuid: string
   interruptedTurnId: string | null
-  interruptedTurnEngagedPlanId: string | null
   /** 已展示但尚未进入完整 turn/messages 或共识起点的根用户输入。 */
   undeliveredUserInputIds: string[]
   /** 未送达的排队输入；仅用户取回编辑的输入处于 restored 状态。 */
@@ -673,7 +659,6 @@ export interface SessionRecorder {
   recordTurnStart(
     turnId: string,
     messages: ModelMessage[],
-    engagedPlanId?: string,
     deliveredInputIds?: readonly string[],
     rootInputId?: string,
     skills?: readonly ActivatedSkill[],
@@ -683,7 +668,6 @@ export interface SessionRecorder {
     turnId: string,
     messages: ModelMessage[],
     taskState?: TaskPlanStepUpdate,
-    engagedPlanId?: string | null,
     resources?: {
       attachments?: readonly ImageAttachment[]
       pdfAttachments?: readonly PdfAttachment[]

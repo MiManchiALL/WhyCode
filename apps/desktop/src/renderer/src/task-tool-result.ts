@@ -11,7 +11,7 @@ export interface TaskToolResult {
 }
 
 const TASK_TOOL_NAMES = new Set([
-  'CreateTaskPlan', 'ResumeTaskPlan', 'UpdateTaskItem', 'CloseTaskPlan',
+  'CreateTaskPlan', 'UpdateTaskItem', 'CloseTaskPlan',
 ])
 
 export function parseTaskToolResult(call: ToolCall): TaskToolResult | null {

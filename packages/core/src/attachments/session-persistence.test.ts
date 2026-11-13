@@ -252,7 +252,6 @@ describe('图片会话持久化', () => {
         'turn-steering',
         [createImageUserMessage('', attachments)],
         undefined,
-        undefined,
         { attachments, deliveredInputIds: [inputId] },
       )
       const delivered = await store.open(journal.sessionId)

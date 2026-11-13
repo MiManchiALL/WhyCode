@@ -285,24 +285,25 @@ describe('后台命令会话', () => {
         projectDir: fixture.cwd,
         additionalDirs: [],
         abortSignal: new AbortController().signal,
-        engagedPlanId: '33333333-3333-4333-8333-333333333333',
+        turnId: '33333333-3333-4333-8333-333333333333',
       })
       assert.match(notifying.data, /通知你并自动继续/)
       const running = (await manager.list(SESSION_A)).find((task) => task.status === 'running')
       assert.ok(running)
       assert.equal(
-        manager.hasPendingPlanContinuation(
+        manager.hasPendingCommandWake(
           SESSION_A,
           '33333333-3333-4333-8333-333333333333',
         ),
         true,
       )
+      assert.equal(manager.hasPendingCommandWake(SESSION_A, 'another-turn'), false)
       // ManageCommand read 接收终态会消费通知；这里仅观察生命周期，验证无人读取时的自动通知。
       await manager.writeInput(SESSION_A, running.id, '', true)
       await firstNotification
       assert.equal(notifications[0]?.task.status, 'completed')
       assert.equal(
-        manager.hasPendingPlanContinuation(
+        manager.hasPendingCommandWake(
           SESSION_A,
           '33333333-3333-4333-8333-333333333333',
         ),
@@ -310,7 +311,6 @@ describe('后台命令会话', () => {
       )
       assert.equal(notifications.length, 1)
       assert.equal(notifications[0]?.task.id, running.id)
-      assert.equal(notifications[0]?.engagedPlanId, '33333333-3333-4333-8333-333333333333')
 
       const stoppedStart = await run.execute({
         command: fixture.command,

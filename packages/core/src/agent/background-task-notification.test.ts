@@ -48,7 +48,7 @@ describe('后台任务终态续轮', () => {
       })
       const session = createSession(model, events)
 
-      assert.equal(await session.handleTaskNotification(notification(undefined, status)), 'completed')
+      assert.equal(await session.handleTaskNotification(notification(status)), 'completed')
       assert.equal(model.doStreamCalls.length, 1)
       assert.equal(events.some((event) => event.type === 'message-queued'), false)
       assert.equal(events.some((event) => event.type === 'message-injected'), false)
@@ -78,7 +78,7 @@ describe('后台任务终态续轮', () => {
       const running = session.handleUserMessage('开始执行任务')
       await firstStarted.promise
 
-      assert.equal(session.handleTaskNotification(notification(undefined, status)), undefined)
+      assert.equal(session.handleTaskNotification(notification(status)), undefined)
       releaseFirst.resolve()
 
       assert.equal(await running, 'completed')
@@ -139,11 +139,11 @@ describe('后台任务终态续轮', () => {
             { label: 'macOS', description: '按 macOS 处理' },
           ],
         }],
-      }, null),
+      }),
     ])
 
     assert.equal(session.waitingForUserInput, true)
-    assert.equal(session.handleTaskNotification(notification(undefined, 'stopped')), undefined)
+    assert.equal(session.handleTaskNotification(notification('stopped')), undefined)
     assert.equal(model.doStreamCalls.length, 0)
     assert.equal(
       await answerFirstQuestion(session, 'Windows'),
@@ -153,61 +153,36 @@ describe('后台任务终态续轮', () => {
     assert.equal(model.doStreamCalls.length, 1)
   })
 
-  it('仅同一未中断计划的后台结果恢复 engaged 执行语义', async () => {
-    for (const [engagedPlanId, expectsContinuation] of [
-      [PLAN_ID, true],
-      ['44444444-4444-4444-8444-444444444444', false],
-    ] as const) {
-      const model = new MockLanguageModelV4({ doStream: async () => finalStep('处理完成。') })
-      const session = createSession(model, [])
-      session.restoreTaskStateSnapshot(completedActivePlanState())
-
-      const outcome = await session.handleTaskNotification(notification(engagedPlanId))
-      assert.equal(outcome, 'completed')
-      const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
-      assert.match(prompt, /task-notification/)
-      assert.equal(prompt.includes('whycode-task-continuation'), expectsContinuation)
-      assert.equal(
-        session.captureTaskStateSnapshot()?.activePlan === null,
-        expectsContinuation,
-      )
-    }
-
-    const interruptedModel = new MockLanguageModelV4({ doStream: async () => finalStep('保持等待。') })
-    const interruptedSession = createSession(interruptedModel, [])
-    interruptedSession.restoreTaskStateSnapshot({
-      ...completedActivePlanState(),
-      version: 2,
-      resumeRequired: true,
-      interruptionReason: 'user-cancel',
-    })
-    assert.equal(
-      await interruptedSession.handleTaskNotification(notification(PLAN_ID)),
-      'completed',
-    )
-    assert.doesNotMatch(
-      JSON.stringify(interruptedModel.doStreamCalls[0]?.prompt),
-      /whycode-task-continuation/,
-    )
+  it('后台通知只交付命令结果，普通回答保留当前未完成计划', async () => {
+    const model = new MockLanguageModelV4({ doStream: async () => finalStep('已查看命令输出。') })
+    const session = createSession(model, [])
+    const current = incompleteActivePlanState()
+    session.restoreTaskStateSnapshot(current)
+    assert.equal(await session.handleTaskNotification(notification()), 'completed')
+    assert.match(JSON.stringify(model.doStreamCalls[0]?.prompt), /task-notification/)
+    assert.deepEqual(session.captureTaskStateSnapshot(), current)
   })
 
-  it('等待已登记后台唤醒时保留计划，终态续轮自然结束同一计划', async () => {
-    let pending = true
+  it('等待后台时保留计划，收到终态后按最新进度继续', async () => {
+    let waitingTurn: string | undefined
+    const events: CoreEvent[] = []
     const model = new MockLanguageModelV4({
       doStream: [
         finalStep('后台构建仍在运行，等待完成后继续。'),
         finalStep('后台构建完成，已检查结果。'),
       ],
     })
-    const session = createSession(model, [], () => pending)
+    const session = createSession(model, events, turnId => {
+      waitingTurn ??= events.find(event => event.type === 'turn-start')?.turnId
+      return turnId === waitingTurn
+    })
     session.restoreTaskStateSnapshot(incompleteActivePlanState())
 
-    assert.equal(await session.handleTaskNotification(notification(PLAN_ID)), 'paused')
+    assert.equal(await session.handleTaskNotification(notification()), 'paused')
     assert.equal(session.captureTaskStateSnapshot()?.activePlan?.id, PLAN_ID)
 
-    pending = false
-    assert.equal(await session.handleTaskNotification(notification(PLAN_ID)), 'completed')
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
+    assert.equal(await session.handleTaskNotification(notification()), 'completed')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.id, PLAN_ID)
   })
 
   it('长期后台服务不拖住已全部完成的计划', async () => {
@@ -217,12 +192,12 @@ describe('后台任务终态续轮', () => {
     const session = createSession(model, [], () => true)
     session.restoreTaskStateSnapshot(completedActivePlanState())
 
-    assert.equal(await session.handleTaskNotification(notification(PLAN_ID)), 'completed')
+    assert.equal(await session.handleTaskNotification(notification()), 'completed')
     assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 })
 
-function notification(engagedPlanId?: string, status: 'completed' | 'stopped' = 'completed'): CommandTaskTerminalNotification {
+function notification(status: 'completed' | 'stopped' = 'completed'): CommandTaskTerminalNotification {
   return {
     task: {
       schemaVersion: 1,
@@ -238,7 +213,6 @@ function notification(engagedPlanId?: string, status: 'completed' | 'stopped' = 
       outputBytes: 128,
       canWrite: false,
     },
-    ...(engagedPlanId ? { engagedPlanId } : {}),
   }
 }
 
@@ -274,8 +248,6 @@ function completedActivePlanState(): TaskPlanState {
         },
       ],
     },
-    resumeRequired: false,
-    interruptionReason: null,
   }
 }
 
@@ -297,13 +269,13 @@ function incompleteActivePlanState(): TaskPlanState {
 function createSession(
   model: MockLanguageModelV4,
   events: CoreEvent[],
-  hasPendingTaskPlanContinuation?: (planId: string) => boolean,
+  hasPendingCommandWake?: (turnId: string) => boolean,
 ): AgentSession {
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
-    hasPendingTaskPlanContinuation,
+    hasPendingCommandWake,
     emit: (event) => events.push(event),
     requestApproval: async () => ({ approved: false }),
   })

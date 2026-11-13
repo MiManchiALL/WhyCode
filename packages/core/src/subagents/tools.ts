@@ -75,7 +75,6 @@ export function createSubagentTools(host: SubagentToolHost): ToolDefinition[] {
         prompt: input.prompt!,
         parentTurnId: ctx.turnId,
         parentToolCallId: ctx.toolCallId,
-        ...(ctx.engagedPlanId ? { engagedPlanId: ctx.engagedPlanId } : {}),
       }
       if (input.action === 'send') {
         return toolResult(await host.send({ ...request, subagentId: input.subagent_id! }), '已发送消息给')

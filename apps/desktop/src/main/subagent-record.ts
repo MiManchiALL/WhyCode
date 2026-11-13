@@ -26,7 +26,6 @@ export function createSubagentActivation(
     parentTurnId: request.parentTurnId,
     parentToolCallId: request.parentToolCallId,
     promptPreview: unicodeSafePrefix(request.prompt, promptPreviewLimit),
-    ...(request.engagedPlanId ? { engagedPlanId: request.engagedPlanId } : {}),
     startedAt,
   }
 }
@@ -79,7 +78,6 @@ export function subagentSettlement(
     description: manifest.taskDescription,
     outcome: activation.outcome,
     resultText: activation.resultText,
-    ...(activation.engagedPlanId ? { engagedPlanId: activation.engagedPlanId } : {}),
   }
 }
 
@@ -170,8 +168,4 @@ export function interruptedSubagentText(events: readonly ViewEvent[], activation
     }
   }
   return blocks.length ? blocks.join('\n\n') : latest
-}
-
-export function subagentContinuationKey(parentSessionId: string, planId: string): string {
-  return `${parentSessionId}:${planId}`
 }

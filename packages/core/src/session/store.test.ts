@@ -91,7 +91,6 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       turnId,
       [{ role: 'user', content: '原问题' }],
-      undefined,
       [],
       inputId,
       [skill],
@@ -245,7 +244,6 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       turnId,
       [message('user', '执行共识结果')],
-      undefined,
       [steeringInputId],
       undefined,
       [rootSkill, steeringSkill],
@@ -271,7 +269,6 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       queuedTurnId,
       [message('user', '下一排队根')],
-      undefined,
       [queuedInputId],
       undefined,
       [steeringSkill],
@@ -433,7 +430,6 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       'turn-queue',
       [message('user', '开始')],
-      undefined,
       [],
       rootInputId,
     )
@@ -451,7 +447,6 @@ describe('SessionStore', () => {
     await queued.recordStep(
       'turn-queue',
       [message('user', '第一条插话'), message('user', '第二条插话')],
-      undefined,
       undefined,
       { deliveredInputIds: [firstId, secondId] },
     )
@@ -472,7 +467,6 @@ describe('SessionStore', () => {
     await journal.recordStep(
       'turn-visible-steering',
       [message('user', '交付后即崩溃的插话')],
-      undefined,
       undefined,
       { deliveredInputIds: [inputId] },
     )
@@ -598,7 +592,7 @@ describe('SessionStore', () => {
   it('持久化等待用户状态和问题卡', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
-    const result = questionResult({ id: 'question-1', questions: [{ header: '选择', question: '哪一个？' }] }, null)
+    const result = questionResult({ id: 'question-1', questions: [{ header: '选择', question: '哪一个？' }] })
     const question = { type: 'core-event', event: { type: 'user-question', question: result.whycode!.questionBatch! } }
     await journal.recordTurnStart('turn-question', [message('user', '帮我选择')])
     await journal.recordStep('turn-question', [result])
@@ -618,7 +612,7 @@ describe('SessionStore', () => {
       { type: 'tool-call', toolCallId: 'read', toolName: 'ReadFile', input: {} },
       { type: 'tool-call', toolCallId: 'ask', toolName: 'AskUserQuestion', input: { questions: batch.questions } },
     ] }])
-    await journal.recordStep('running', [questionResult(batch, null)])
+    await journal.recordStep('running', [questionResult(batch)])
     assert.equal((await store.readSummary(journal.sessionId, journal.metadataSnapshot))?.hasPendingQuestions, true)
     const ids = questionsForBatch(batch).map(item => item.id)
     await assert.rejects(journal.recordQuestionSkips([ids[0]!, 'missing']), /已处理/)
@@ -656,7 +650,7 @@ describe('SessionStore', () => {
     await journal.recordTurnStart('turn-question-crash', [message('user', '继续配置')])
     await journal.recordStep(
       'turn-question-crash',
-      [questionResult(question, null)],
+      [questionResult(question)],
     )
 
     const interrupted = await store.open(journal.sessionId)
@@ -722,7 +716,6 @@ describe('SessionStore', () => {
       parentUuid: input.uuid,
       timestamp: new Date().toISOString(),
       turnId: 'answer-partial-turn',
-      engagedPlanId: null,
     })
     await appendFile(
       transcript,
@@ -745,7 +738,7 @@ describe('SessionStore', () => {
     assert.equal(recovered.initialMessages.filter(isTurnAbortedMessage).length, 1)
   })
 
-  it('稳定 step 的消息、engagement 与 TaskPlanState 只以单条记录原子恢复', async () => {
+  it('稳定 step 的消息与 TaskPlanState 只以单条记录原子恢复', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const initialState = state(taskPlan(1))
@@ -759,7 +752,6 @@ describe('SessionStore', () => {
       'crashed-step',
       [message('assistant', '本步已完成 T1')],
       advancedState,
-      advancedState.activePlan!.id,
     )
     const transcript = join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl')
     const lines = (await readFile(transcript, 'utf8')).trimEnd().split('\n')
@@ -767,7 +759,6 @@ describe('SessionStore', () => {
     const parsedStep = JSON.parse(committedStep) as Record<string, unknown>
     assert.equal(parsedStep.type, 'messages')
     assert.ok(parsedStep.taskState)
-    assert.equal(parsedStep.engagedPlanId, advancedState.activePlan!.id)
     await writeFile(
       transcript,
       `${lines.join('\n')}\n${committedStep.slice(0, Math.floor(committedStep.length / 2))}`,
@@ -987,37 +978,17 @@ describe('SessionStore', () => {
     assert.equal(restartedAgain.metadataSnapshot.status, 'idle')
   })
 
-  it('进程恢复只阻塞被中断的 engaged 计划，不误伤 dormant 计划', async () => {
-    const dormantStore = await createStore()
-    const dormantJournal = await dormantStore.create({ workspace: localWorkspace(null), modelId: 'test:model' })
-    const plan = taskPlan(1)
-    const savedState = state(plan)
-    await dormantJournal.recordTurnStart('seed-dormant', [message('user', '建立计划')])
-    await dormantJournal.recordStep('seed-dormant', [message('assistant', '计划已建立')], savedState)
-    await dormantJournal.recordTurnEnd('seed-dormant', 'paused')
-    await dormantJournal.recordTurnStart('dormant-question', [message('user', 'TTL 是什么')])
-
-    const dormantCrash = await dormantStore.open(dormantJournal.sessionId)
-    await dormantCrash.recoverInterruptedWork()
-    const dormantRecovered = await dormantStore.open(dormantJournal.sessionId)
-    assert.deepEqual(dormantRecovered.initialTaskState, savedState)
-
-    const engagedStore = await createStore()
-    const engagedJournal = await engagedStore.create({ workspace: localWorkspace(null), modelId: 'test:model' })
-    await engagedJournal.recordTurnStart('seed-engaged', [message('user', '建立计划')])
-    await engagedJournal.recordStep('seed-engaged', [message('assistant', '计划已建立')], savedState)
-    await engagedJournal.recordTurnEnd('seed-engaged', 'paused')
-    await engagedJournal.recordTurnStart(
-      'engaged-work',
-      [message('user', '继续计划')],
-      plan.id,
-    )
-
-    const engagedCrash = await engagedStore.open(engagedJournal.sessionId)
-    await engagedCrash.recoverInterruptedWork()
-    const engagedRecovered = await engagedStore.open(engagedJournal.sessionId)
-    assert.equal(engagedRecovered.initialTaskState.resumeRequired, true)
-    assert.equal(engagedRecovered.initialTaskState.interruptionReason, 'process-interruption')
+  it('进程恢复保留最后提交的计划，单独记录回合中断', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    const saved = state(taskPlan(2))
+    await journal.recordTurnStart('work', [message('user', '继续计划')])
+    await journal.recordStep('work', [message('assistant', '进度已更新')], saved)
+    const interrupted = await store.open(journal.sessionId)
+    await interrupted.recoverInterruptedWork()
+    const recovered = await store.open(journal.sessionId)
+    assert.deepEqual(recovered.initialTaskState, saved)
+    assert.ok(recovered.initialMessages.some(isTurnAbortedMessage))
   })
 
   it('连续中断恢复时总是在最新半截回合之后建立新边界', async () => {
@@ -1086,7 +1057,6 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       'turn-old',
       [message('user', '旧问题')],
-      undefined,
       [],
       oldInputId,
     )
@@ -1124,7 +1094,6 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       'turn-edited',
       [message('user', '编辑后的问题')],
-      undefined,
       [],
       editedInputId,
     )
@@ -1195,7 +1164,6 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       'turn-1',
       [message('user', '第一问')],
-      undefined,
       [],
       firstInputId,
     )
@@ -1209,7 +1177,6 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       'turn-2',
       [message('user', '第二问')],
-      undefined,
       [],
       secondInputId,
     )
@@ -1475,10 +1442,7 @@ describe('SessionStore', () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const plan = taskPlan(1)
-    const savedState = state(plan, 7, {
-      resumeRequired: true,
-      interruptionReason: 'user-cancel',
-    })
+    const savedState = state(plan, 7)
     await journal.recordTurnStart('turn-1', [message('user', '开始')])
     await journal.recordStep('turn-1', [message('assistant', '计划中')], savedState)
     await journal.recordTurnEnd('turn-1', 'paused')
@@ -2058,7 +2022,7 @@ async function waitingQuestionSession() {
       ],
     }],
   }
-  const result = questionResult(question, null)
+  const result = questionResult(question)
   const questions = questionsForBatch(question)
   const questionEvent = { type: 'core-event' as const, event: { type: 'user-question' as const, question } }
   const answer = '回答「你使用哪个系统？」：Windows'
@@ -2145,16 +2109,6 @@ function taskPlan(revision: number): ActiveTaskPlan {
 function state(
   activePlan: ActiveTaskPlan | null,
   version = activePlan?.revision ?? 0,
-  overrides: Partial<Pick<
-    TaskPlanState,
-    'resumeRequired' | 'interruptionReason'
-  >> = {},
 ): TaskPlanState {
-  return {
-    version,
-    activePlan,
-    resumeRequired: false,
-    interruptionReason: null,
-    ...overrides,
-  }
+  return { version, activePlan }
 }
