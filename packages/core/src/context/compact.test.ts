@@ -120,6 +120,12 @@ describe('按预算划分历史与当前正式 turn', () => {
     const output = await compact(model, messages)
     const h = JSON.stringify(model.doGenerateCalls[0]!.prompt)
     const p = JSON.stringify(model.doGenerateCalls[1]!.prompt)
+    for (const { prompt } of model.doGenerateCalls) {
+      const system = prompt.find(message => message.role === 'system')
+      assert.ok(system)
+      assert.match(system.content, /省略计划条目、计划进度和子代理运行状态/u)
+      assert.match(system.content, /保留实际完成的工作、关键发现和未解决的阻塞/u)
+    }
     assert.match(h, /H1/); assert.match(h, /P_A/); assert.match(h, /A 后续结果/)
     assert.doesNotMatch(h, /B 新工作/)
     assert.match(p, /B 新工作/); assert.doesNotMatch(p, /P_A|H1|A 后续结果/)

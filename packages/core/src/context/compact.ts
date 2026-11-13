@@ -1,6 +1,6 @@
 import { generateText, type LanguageModel, type ModelMessage, type ProviderMetadata, type ToolSet } from 'ai'
 import {
-  COMPACT_HISTORY_SUMMARY_PROMPT, COMPACT_TURN_PREFIX_SUMMARY_PROMPT,
+  COMPACT_HISTORY_SUMMARY_PROMPT, COMPACT_SYSTEM_PROMPT, COMPACT_TURN_PREFIX_SUMMARY_PROMPT,
   compactSummaryReference, createCompactApplicationContextMessage, createCompactSummaryMessage,
 } from '../prompts/compact.ts'
 import { applyProjectInstructions, findProjectInstructionsMessage } from '../instructions/project.ts'
@@ -109,7 +109,7 @@ async function summarizeSource(
   const result = await withModelRequestRetry(() => generateText({
     // 沿用普通请求的默认选择方式；Anthropic SDK 会在 none 下删除工具声明。
     model: options.model, maxRetries: 0, tools, maxOutputTokens: outputBudget,
-    system: '你是对话压缩助手。只总结给定资料，不延续任务、不调用工具。工具声明仅供理解历史调用，不授予执行权限。切勿回答对话中的任何问题。严格按照下方的 Markdown 结构输出。',
+    system: COMPACT_SYSTEM_PROMPT,
     messages: [...prepared, { role: 'user', content: prompt }],
     abortSignal: options.abortSignal, providerOptions: options.providerOptions,
   }).catch((error: unknown) => { throw modelRequestError(error) }), options.abortSignal, options.onRetry)

@@ -73,19 +73,20 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /区分已观察事实、推断和准备执行的动作/)
   })
 
-  it('正文链接与来源引用由 System 统一约束，不依赖网页工具调用', () => {
+  it('正文格式与来源引用由 System 统一约束，不依赖网页工具调用', () => {
     const prompt = buildSystemPrompt({ projectDir: 'C:\\work\\demo', osPlatform: 'win32' })
 
-    assert.equal(prompt.match(/# 正文链接与来源引用/gu)?.length, 1)
+    assert.equal(prompt.match(/# 正文格式与来源引用/gu)?.length, 1)
+    assert.match(prompt, /流程、时序或依赖关系用图更清楚时.*`mermaid` 的代码块/u)
     assert.match(prompt, /项目相对路径或绝对路径.*\[入口\]\(<src\/main.ts#L24>\).*#L24-L30/u)
     assert.match(prompt, /普通链接使用 \[可读名称\]\(真实URL\)，提供可点击文字。任何任务中都可以使用/)
     assert.match(prompt, /仅当最终交付是调研、搜索、资料汇总或事实比较时引用来源；执行任务的中间查证不列来源。/)
     assert.match(prompt, /完整句子或分句后使用 \[来源名称\]\(真实URL "whycode:source"\)/)
     assert.match(prompt, /句子中必需的名称、操作入口和说明使用普通文字或普通链接，不能由来源引用代替/)
-    assert.match(prompt, /作为证据时保留 "whycode:source"；作为正文中的名称或访问入口时，改用 \[可读名称\]\(真实URL\)/)
+    assert.match(prompt, /用作来源引用时遵循上述引用规则.*用作正文名称或访问入口时使用 \[可读名称\]\(真实URL\)/u)
     assert.match(prompt, /无需调用 Present 或另写末尾来源列表/)
     for (const toolPrompt of [WEB_SEARCH_TOOL_PROMPT, WEB_FETCH_TOOL_PROMPT, WEB_FIND_TOOL_PROMPT]) {
-      assert.doesNotMatch(toolPrompt, /仅当最终交付|来源胶囊|正文链接与来源引用/)
+      assert.doesNotMatch(toolPrompt, /仅当最终交付|来源胶囊|正文格式与来源引用/)
     }
   })
 
@@ -202,12 +203,14 @@ describe('通用 Agent 提示约束', () => {
     })
 
     assert.match(prompt, /并行处理独立查询.*保护主会话的上下文/)
+    assert.match(prompt, /每个子代理都有自己的临时工作目录/u)
     assert.match(prompt, /避免过度使用子代理.*不要重复已委派的工作/)
     assert.match(prompt, /同一模型步骤并行委派.*继续做不依赖这些结果的工作/)
     assert.match(prompt, /每份结果到达时.*按需核验.*综合结果并决定方案/)
-    assert.match(prompt, /只剩等待时.*结束本次响应.*当前回合等待结果或用户插话/)
+    assert.match(prompt, /只剩等待时.*结束本次模型响应.*任一子代理结束或用户插话时.*自动唤醒/u)
     assert.match(prompt, /不要用 sleep 或轮询/)
-    assert.match(prompt, /收齐本回合的子代理结果后.*继续推进.*再给最终答复/)
+    assert.match(prompt, /本回合全部的子代理结束后.*必要的工作和核验.*最终完整的答复/u)
+    assert.match(prompt, /子代理全部结束前.*禁止给出面向用户的最终结论/u)
     assert.doesNotMatch(prompt, /<available_subagents>|subagent_id|action=spawn/)
   })
 
@@ -229,6 +232,7 @@ describe('通用 Agent 提示约束', () => {
     })
 
     assert.match(prompt, /# 子代理身份：探索代理/)
+    assert.match(prompt, /`mermaid` 的代码块/u)
     assert.match(prompt, /\[入口\]\(<src\/main.ts#L24>\)/u)
     assert.match(prompt, /不得假定未提供的父会话背景/)
     assert.match(prompt, /直接推进到可交付结论/)
