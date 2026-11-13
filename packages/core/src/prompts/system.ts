@@ -100,15 +100,16 @@ function toolUsageSection(
   ].join('\n')
 }
 
-function responseLinksSection(): string {
+function responseFormatSection(): string {
   return [
-    '# 正文链接与来源引用',
+    '# 正文格式与来源引用',
     '- 普通链接使用 [可读名称](真实URL)，提供可点击文字。任何任务中都可以使用，适用于官网、文档、仓库、下载页面，以及正文中需要保留名称的对象。',
     '- 正文提及已有文件时，用文件名或简短说明作链接文字，目标用项目相对路径或绝对路径，含空格时用尖括号包住。已知行号可写 [入口](<src/main.ts#L24>)，多行用 #L24-L30。',
     `- 来源引用：仅当最终交付是调研、搜索、资料汇总或事实比较时引用来源；执行任务的中间查证不列来源。在相关完整句子或分句后使用 [来源名称](真实URL "${WEB_SOURCE_CITATION_MARKER}")，来源名称使用网页标题或能明确识别该来源的名称。界面将其显示为引用图标，点击定位到回答末尾的对应来源胶囊。`,
     '- 正文必须独立完整、通顺。句子中必需的名称、操作入口和说明使用普通文字或普通链接，不能由来源引用代替。',
-    `- 网页工具返回的链接按用途使用：作为证据时保留 "${WEB_SOURCE_CITATION_MARKER}"；作为正文中的名称或访问入口时，改用 [可读名称](真实URL)。同一 URL 可以分别承担这两种用途。`,
+    '- 网页工具返回的链接，用作来源引用时遵循上述引用规则，用作正文名称或访问入口时使用 [可读名称](真实URL)。同一 URL 可以分别承担这两种用途。',
     '- 来源胶囊由显式引用自动汇总，无需调用 Present 或另写末尾来源列表。链接地址与来源信息必须真实，不得编造。',
+    '- 流程、时序或依赖关系用图更清楚时，直接在正文中使用标记为 `mermaid` 的代码块。',
   ].join('\n')
 }
 
@@ -183,9 +184,9 @@ function subagentSection(subagent: NonNullable<PromptContext['subagent']>): stri
 function parentSubagentSection(): string {
   return [
     '# 子代理',
-    '- 子代理适合并行处理独立查询，也适合将大量中间输出留在子代理中，保护主会话的上下文。避免过度使用子代理，也不要重复已委派的工作。',
+    '- 子代理适合并行处理独立查询，也适合将大量中间输出留在子代理中，保护主会话的上下文。每个子代理都有自己的临时工作目录。避免过度使用子代理，也不要重复已委派的工作。',
     '- 互不依赖的任务在同一模型步骤并行委派，随后继续做不依赖这些结果的工作。每份结果到达时，按需核验关键证据，由你综合结果并决定方案。',
-    '- 只剩等待时，简短说明一次，结束本次响应，让 WhyCode 在当前回合等待结果或用户插话。不要用 sleep 或轮询状态来等待。收齐本回合的子代理结果后，若仍有必要的工作或核验，就继续推进，直到可以完整回应用户的请求，再给最终答复。',
+    '- 只剩等待时，简短说明一次并结束本次模型响应。任一子代理结束或用户插话时，WhyCode 会自动唤醒你。不要用 sleep 或轮询等待。本回合全部的子代理结束后，完成必要的工作和核验，再给最终完整的答复。子代理全部结束前，禁止给出面向用户的最终结论。',
   ].join('\n')
 }
 
@@ -199,13 +200,13 @@ export function buildSystemPrompt(
   const sections = ctx.subagent ? [
     subagentSection(ctx.subagent),
     environmentSection(ctx.projectDir, ctx.osPlatform, ctx.homeDir, activeScratch),
-    responseLinksSection(),
+    responseFormatSection(),
     taskPlanningSection(),
   ] : [
     identitySection(),
     environmentSection(ctx.projectDir, ctx.osPlatform, ctx.homeDir, activeScratch),
     toolUsageSection(!ctx.discussion, Boolean(activeScratch)),
-    responseLinksSection(),
+    responseFormatSection(),
   ]
   if (ctx.discussion) sections.push(discussionSection(ctx.discussion))
   if (ctx.subagentsEnabled && !ctx.discussion && !ctx.subagent) {
