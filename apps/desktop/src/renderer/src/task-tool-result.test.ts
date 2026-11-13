@@ -7,7 +7,7 @@ import { parseTaskToolResult } from './task-tool-result.ts'
 
 function state(): TaskPlanState {
   return {
-    version: 1, resumeRequired: false, interruptionReason: null,
+    version: 1,
     activePlan: {
       id: '12345678-1234-4234-8234-123456789abc', revision: 1,
       goal: '让任务计划结果清晰可读', status: 'active',
@@ -23,20 +23,18 @@ function state(): TaskPlanState {
 function call(name: string, snapshot = state(), input: unknown = {}, ok = true): ToolCall {
   return {
     id: 'task-call', name, input, status: ok ? 'done' : 'error', progress: '',
-    result: formatTaskToolResult(name, { ok, message: ok ? '计划已更新。' : '请先恢复当前计划。' }, snapshot, snapshot.activePlan?.id),
+    result: formatTaskToolResult(name, { ok, message: ok ? '计划已更新。' : '当前没有活动任务计划。' }, snapshot),
   }
 }
 
 describe('任务计划工具历史详情', () => {
-  it('使用 Core 实际结果格式读取创建和恢复后的计划，不从请求推测计划内容', () => {
-    for (const name of ['CreateTaskPlan', 'ResumeTaskPlan']) {
-      const snapshot = state()
-      const result = parseTaskToolResult(call(name, snapshot, { goal: '不应显示的请求目标' }))
-      assert.equal(result?.ok, true)
-      assert.equal(result?.plan?.goal, snapshot.activePlan?.goal)
-      assert.deepEqual(result?.plan?.items, snapshot.activePlan?.items)
-      assert.deepEqual(result?.updatedItemIds, [])
-    }
+  it('使用 Core 实际结果格式读取创建后的计划，不从请求推测计划内容', () => {
+    const snapshot = state()
+    const result = parseTaskToolResult(call('CreateTaskPlan', snapshot, { goal: '不应显示的请求目标' }))
+    assert.equal(result?.ok, true)
+    assert.equal(result?.plan?.goal, snapshot.activePlan?.goal)
+    assert.deepEqual(result?.plan?.items, snapshot.activePlan?.items)
+    assert.deepEqual(result?.updatedItemIds, [])
   })
 
   it('从成功结果匹配状态更新、修订和新增项，不为已删除项伪造条目', () => {
@@ -66,7 +64,7 @@ describe('任务计划工具历史详情', () => {
     closed.result = formatTaskToolResult(closed.name, { ok: true, message: '任务计划已结束。' }, snapshot)
     assert.deepEqual(parseTaskToolResult(closed), { ok: true, message: '任务计划已结束。', plan: null, updatedItemIds: [] })
     assert.deepEqual(parseTaskToolResult(call('UpdateTaskItem', state(), { item_id: 'T2', status: 'completed' }, false)), {
-      ok: false, message: '请先恢复当前计划。', plan: null, updatedItemIds: [],
+      ok: false, message: '当前没有活动任务计划。', plan: null, updatedItemIds: [],
     })
     assert.equal(parseTaskToolResult({ ...call('UpdateTaskItem'), status: 'running' }), null)
     assert.equal(parseTaskToolResult({ ...call('UpdateTaskItem'), status: 'error', result: '调用已取消' }), null)

@@ -1,27 +1,16 @@
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
 import { formatTaskToolResult } from './context.ts'
-import {
+import type {
   TaskPlanController,
-  type TaskMutationResult,
-  type TaskPlanItemChange,
-  type TaskPlanTransition,
+  TaskMutationResult,
+  TaskPlanItemChange,
+  TaskPlanTransition,
 } from './controller.ts'
 
 export const CREATE_TASK_PLAN_TOOL_NAME = 'CreateTaskPlan'
-export const RESUME_TASK_PLAN_TOOL_NAME = 'ResumeTaskPlan'
 export const UPDATE_TASK_ITEM_TOOL_NAME = 'UpdateTaskItem'
 export const CLOSE_TASK_PLAN_TOOL_NAME = 'CloseTaskPlan'
-
-export interface TaskPlanEngagementAction {
-  type: 'resume'
-  planId: string
-}
-
-interface TaskPlanToolCallbacks {
-  onEngagementAction: (action: TaskPlanEngagementAction) => void
-  isEngaged: () => boolean
-}
 
 const draftSchema = z.object({
   kind: z.enum(['work', 'verification']).describe('普通里程碑用 work；最终整体验证用 verification'),
@@ -77,31 +66,20 @@ function toolResult(
   controller: TaskPlanController,
   operation: string,
   result: TaskMutationResult,
-  grantsEngagement: boolean,
 ): { data: string; isError: boolean } {
-  const activePlan = controller.snapshot
   return {
-    data: formatTaskToolResult(
-      operation,
-      result,
-      controller.stateSnapshot,
-      result.ok && grantsEngagement ? activePlan?.id : undefined,
-    ),
+    data: formatTaskToolResult(operation, result, controller.stateSnapshot),
     isError: !result.ok,
   }
 }
 
-/** Main 专用控制工具；工具集合和 schema 在会话内保持稳定。 */
-export function createTaskPlanTools(
-  controller: TaskPlanController,
-  callbacks: TaskPlanToolCallbacks,
-): ToolDefinition[] {
+export function createTaskPlanTools(controller: TaskPlanController): ToolDefinition[] {
   return [
     buildTool({
       name: CREATE_TASK_PLAN_TOOL_NAME,
       description: '为复杂目标建立宏观任务计划',
       prompt:
-        '先定向扫描关键文件形成整体认知，再创建 3～7 个结果导向里程碑；不写详细步骤，最后一项必须是唯一 verification。创建时首项自动进入 in_progress，其余为 pending；按结果中的当前项开始执行。本工具独占模型步骤。',
+        '创建 3～7 个结果导向的里程碑，最后一项为整体 verification，首项自动开始。已有活动计划时，新计划会直接替换它。本工具独占模型步骤。',
       inputSchema: z.object({
         goal: z.string().min(1).describe('整个任务最终要达到的可验证结果'),
         items: z.array(draftSchema).min(3).max(7).describe('3～7 个宏观里程碑'),
@@ -114,25 +92,7 @@ export function createTaskPlanTools(
           controller,
           CREATE_TASK_PLAN_TOOL_NAME,
           controller.create(input.goal, input.items),
-          true,
         )
-      },
-    }),
-    buildTool({
-      name: RESUME_TASK_PLAN_TOOL_NAME,
-      description: '让当前执行接合保存的活动计划',
-      prompt:
-        '用户明确继续当前计划时调用；interrupted 或 dormant 都无需重复确认。接合后若没有进行中项，先显式进入下一项，再检查相关代码并实施。本工具独占模型步骤。',
-      inputSchema: z.object({
-        plan_id: z.string().uuid().describe('当前 active_plan 的 ID'),
-      }).strict(),
-      isReadOnly: false,
-      kind: 'control',
-      requiresStandaloneStep: true,
-      async execute(input) {
-        const result = controller.resume(input.plan_id)
-        if (result.ok) callbacks.onEngagementAction({ type: 'resume', planId: input.plan_id })
-        return toolResult(controller, RESUME_TASK_PLAN_TOOL_NAME, result, true)
       },
     }),
     buildTool({
@@ -144,18 +104,6 @@ export function createTaskPlanTools(
       isReadOnly: false,
       kind: 'control',
       async execute(input) {
-        if (!callbacks.isEngaged()) {
-          return toolResult(
-            controller,
-            UPDATE_TASK_ITEM_TOOL_NAME,
-            {
-              ok: false,
-              error: 'not_engaged',
-              message: 'UpdateTaskItem 只能在当前执行已接合计划后调用。',
-            },
-            false,
-          )
-        }
         const changes: TaskPlanItemChange[] = (input.changes ?? []).map((change) => {
           if (change.action === 'add') {
             return {
@@ -185,7 +133,6 @@ export function createTaskPlanTools(
           controller,
           UPDATE_TASK_ITEM_TOOL_NAME,
           controller.update(changes, transition),
-          true,
         )
       },
     }),
@@ -193,7 +140,7 @@ export function createTaskPlanTools(
       name: CLOSE_TASK_PLAN_TOOL_NAME,
       description: '显式结束当前活动计划',
       prompt:
-        '仅在用户放弃当前计划或确认切换独立目标时调用；正常最终答复会由会话协议自动结束计划，无需调用。切换时先结束，下一步骤扫描关键文件后再 CreateTaskPlan。本工具独占模型步骤。',
+        '放弃未完成的计划时调用。本工具独占模型步骤。',
       inputSchema: z.object({}).strict(),
       isReadOnly: false,
       kind: 'control',
@@ -203,7 +150,6 @@ export function createTaskPlanTools(
           controller,
           CLOSE_TASK_PLAN_TOOL_NAME,
           controller.close(),
-          false,
         )
       },
     }),

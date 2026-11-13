@@ -23,7 +23,6 @@ import { visibleCoreEventSchema } from '../session/view-events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import {
-  CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
 } from '../tasks/tools.ts'
 import {
@@ -177,7 +176,7 @@ describe('Agent 资源检查点联动', () => {
       ],
     }
     await recorder.recordTurnStart('question-turn', [{ role: 'user', content: '继续任务' }])
-    await recorder.recordStep('question-turn', [questionResult(question, null)])
+    await recorder.recordStep('question-turn', [questionResult(question)])
     await recorder.recordTurnEnd('question-turn', 'waiting-user')
     const events: CoreEvent[] = []
     const session = new AgentSession({
@@ -264,7 +263,7 @@ describe('Agent 资源检查点联动', () => {
     })
   }
 
-  it('结束旧计划并创建新计划后，文件和对话回滚会恢复原活动计划', async () => {
+  it('用新计划替换旧计划后，文件和对话回滚会恢复原活动计划', async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-plan-switch-'))
     roots.push(root)
     const project = join(root, 'project')
@@ -298,8 +297,6 @@ describe('Agent 资源检查点联动', () => {
     const oldState: TaskPlanState = {
       version: 7,
       activePlan: oldPlan,
-      resumeRequired: true,
-      interruptionReason: 'user-cancel',
     }
     await recorder.recordTurnStart('old-plan', [{ role: 'user', content: '开发蔚蓝' }])
     await recorder.recordStep('old-plan', [{ role: 'assistant', content: '已建立计划' }], oldState)
@@ -373,7 +370,6 @@ function modelRunningCommand(): MockLanguageModelV4 {
 function modelSwitchingAndWriting(path: string): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: [
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {}, 'close-old-plan'),
       toolStep('ListDir', { path: '.', limit: 20 }, 'scan-project'),
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '开发 CSGO 游戏',

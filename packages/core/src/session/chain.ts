@@ -122,7 +122,6 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   )
   const {
     interruptedTurnId,
-    interruptedTurnEngagedPlanId,
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
     interruptedConsensusBaseTurnIds,
@@ -158,7 +157,6 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     turnStartSkills,
     leafUuid: last.uuid,
     interruptedTurnId,
-    interruptedTurnEngagedPlanId,
     undeliveredUserInputIds: undeliveredUserInputs.map((input) => input.id),
     pendingUserInputs,
     interruptedConsensusTaskId,
@@ -1142,14 +1140,12 @@ function findInterruptedWork(
   undeliveredById: ReadonlyMap<string, UndeliveredUserInput>,
 ): {
   interruptedTurnId: string | null
-  interruptedTurnEngagedPlanId: string | null
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null
   interruptedConsensusBaseTaskState: TaskPlanState | null
   interruptedConsensusBaseTurnIds: string[] | null
 } {
   let interruptedTurnId: string | null = null
-  let interruptedTurnEngagedPlanId: string | null = null
   let interruptedConsensusTaskId: string | null = null
   let interruptedConsensusBaseMessages: ModelMessage[] | null = null
   let interruptedConsensusBaseTaskState: TaskPlanState | null = null
@@ -1159,7 +1155,6 @@ function findInterruptedWork(
     if (entry.type === 'snapshot') {
       visibleMessages = [...entry.messages]
       interruptedTurnId = entry.activeTurnId
-      interruptedTurnEngagedPlanId = entry.activeTurnEngagedPlanId
       interruptedConsensusTaskId = entry.activeConsensusTaskId
       // 重放是纯读取：后续遇到未交付输入时会向工作副本 push，绝不能污染已解析快照。
       interruptedConsensusBaseMessages = entry.activeConsensusBaseMessages
@@ -1190,17 +1185,12 @@ function findInterruptedWork(
     }
     if (entry.type === 'messages') {
       visibleMessages.push(...entry.messages)
-      if (entry.turnId === interruptedTurnId && entry.engagedPlanId !== undefined) {
-        interruptedTurnEngagedPlanId = entry.engagedPlanId
-      }
     }
     if (entry.type === 'turn-start') {
       interruptedTurnId = entry.turnId
-      interruptedTurnEngagedPlanId = entry.engagedPlanId
     }
     if (entry.type === 'turn-end' && entry.turnId === interruptedTurnId) {
       interruptedTurnId = null
-      interruptedTurnEngagedPlanId = null
     }
     if (entry.type === 'consensus-task-start') {
       interruptedConsensusTaskId = entry.taskId
@@ -1226,7 +1216,6 @@ function findInterruptedWork(
   }
   return {
     interruptedTurnId,
-    interruptedTurnEngagedPlanId,
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
     interruptedConsensusBaseTaskState,

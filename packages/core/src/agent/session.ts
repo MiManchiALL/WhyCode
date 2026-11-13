@@ -112,21 +112,12 @@ import {
   readModelStream,
   withModelRequestRetry,
 } from '../providers/model-request.ts'
-import {
-  createTaskPlanTools,
-  type TaskPlanEngagementAction,
-  UPDATE_TASK_ITEM_TOOL_NAME,
-} from '../tasks/tools.ts'
+import { createTaskPlanTools } from '../tasks/tools.ts'
 import type { TaskPlanState } from '../tasks/types.ts'
 import { taskPlanViewBeforeTurn } from '../session/task-plan-view.ts'
+import { createTaskStateMessage, taskStateBlock } from '../tasks/context.ts'
 import {
-  createTaskContextMessage,
-  createTaskExecutionBoundaryMessage,
-  createTaskStateMessage,
-  taskContextBlock,
-} from '../tasks/context.ts'
-import {
-  hasPendingUserQuestion, pendingUserQuestions, availableQuestions, withQuestionBatch, applyQuestionSkips, carryPendingQuestions, answersPlanQuestion,
+  hasPendingUserQuestion, pendingUserQuestions, availableQuestions, withQuestionBatch, applyQuestionSkips, carryPendingQuestions,
 } from '../context/question-state.ts'
 import {
   createPermissionContext,
@@ -192,12 +183,10 @@ export type {
 
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
-const TASK_PROGRESS_REMINDER_STEPS = 10
 const MAX_COMPACT_FAILURES = 3
 
 interface PreparedRequestContext {
-  dateReminder: ModelMessage | null
-  subagentCatalogReminder: ModelMessage | null
+  reminders: ModelMessage[]
   persistentMessages: ModelMessage[]
   messages: ModelMessage[]
   projectionDelta: number
@@ -214,8 +203,6 @@ interface ToolStepContext {
   /** 侧对话保留原有的文本文件读取边界，不创建视觉工具附件。 */
   textOnlyFileReads?: boolean
   subagentDefinitions?: readonly SubagentDefinitionSnapshot[]
-  planExecutionEngaged?: boolean
-  onTaskPlanEngagement?: (action: TaskPlanEngagementAction) => void
   onUserQuestion?: (id: string, items: UserQuestionItem[]) => void
   onTurnEndingTool?: () => void
   onImageAttachments?: (
@@ -248,8 +235,8 @@ export interface AgentSessionOptions {
   pdfProcessor?: PdfProcessor
   /** 非视觉 Main 可按需调用的独立识图模型；视觉 Main 不装配对应工具。 */
   auxiliaryImageAnalyzer?: AuxiliaryImageAnalyzer
-  /** 宿主判断当前计划是否仍有已登记、将自动唤醒同一会话的后台任务。 */
-  hasPendingTaskPlanContinuation?: (planId: string) => boolean
+  /** 当前回合是否登记了仍待交付的后台命令通知。 */
+  hasPendingCommandWake?: (turnId: string) => boolean
   /** 宿主从持久事实源投影当前父 turn 的子代理激活状态。 */
   getSubagentTurnState?: (turnId: string) => Promise<SubagentTurnState>
   /** 用户请求的 Main 执行阶段按需扫描待交付结果；冷恢复本身不请求模型。 */
@@ -326,15 +313,9 @@ interface TurnModelSelection {
 }
 
 interface StepResult {
-  committed: boolean
   hadToolCalls: boolean
-  /** 仅保存既有计划进度，不代表模型决定忽略最新 steering 继续实质执行。 */
-  hadOnlyTaskProgressUpdates: boolean
   endedByTool: boolean
-  taskPlanChanged: boolean
-  taskPlanEngagement: TaskPlanEngagementAction | null
   interruptionBoundaryConsumed: boolean
-  awaitingTaskPlanContinuation: boolean
 }
 
 /** 每次模型请求推进一步。会话在稳定步骤边界处理立即插话，在回合边界调度后续用户请求。 */
@@ -1111,7 +1092,7 @@ export class AgentSession {
       this.wakeRunLoop()
       return
     }
-    return this.startTurn([item.message], [], undefined, [], [item], true, 'internal')
+    return this.startTurn([item.message], [], undefined, [], [item], 'notification')
   }
 
   /** 只唤醒正在运行的父回合；空闲或已停止时由磁盘保留到下一次用户输入。 */
@@ -1328,7 +1309,6 @@ export class AgentSession {
       undefined,
       skills,
       notifications,
-      false,
       'internal',
     )
   }
@@ -1397,8 +1377,7 @@ export class AgentSession {
     rootInputId?: string,
     skills: readonly ActivatedSkill[] = [],
     taskNotifications: readonly QueuedTaskNotification[] = [],
-    resumeTaskPlanFromNotification = false,
-    inputSource: 'user' | 'internal' = 'user',
+    inputSource: 'user' | 'internal' | 'notification' = 'user',
   ): Promise<StopReason> {
     const turnModelSelection: TurnModelSelection = {
       model: this.options.model,
@@ -1417,7 +1396,6 @@ export class AgentSession {
       rootInputId,
       skills,
       taskNotifications,
-      resumeTaskPlanFromNotification,
       inputSource,
     ).finally(() => {
       if (this.activeModelSelection === turnModelSelection) {
@@ -1582,8 +1560,7 @@ export class AgentSession {
       undefined,
       next?.skills,
       notifications,
-      !next,
-      next ? 'user' : 'internal',
+      next ? 'user' : 'notification',
     )
   }
 
@@ -1654,7 +1631,7 @@ export class AgentSession {
   }
 
   /** 步骤间注入真实用户消息；其语义由模型结合当前计划状态自行判断。 */
-  private async injectQueuedMidTurn(ending = false): Promise<{ userInput: boolean; resumesPlan: boolean }> {
+  private async injectQueuedMidTurn(ending = false): Promise<void> {
     const ready = (item: QueuedMessage) => ending ? Boolean(item.questionReply) : item.urgent
     const drained = this.queue.filter(ready)
     if (drained.length) this.queue = this.queue.filter(item => !ready(item))
@@ -1668,8 +1645,6 @@ export class AgentSession {
       }),
       ...notifications.map((item) => item.message),
     ]
-    const resumesPlan = !ending && drained.some(item => item.questionReply) && !this.taskPlan?.stateSnapshot.resumeRequired
-      && answersPlanQuestion(this.pendingQuestions, injected, this.taskPlan?.snapshot?.id)
     if (injected.length > 0 && this.activeTurn) {
       try {
         await this.persistRequired(
@@ -1677,7 +1652,6 @@ export class AgentSession {
             this.activeTurn!.id,
             injected,
             undefined,
-            resumesPlan ? this.taskPlan?.snapshot?.id : undefined,
             {
               attachments: drained.flatMap((item) => item.attachments),
               deliveredInputIds: drained.filter((item) => item.persisted).map((item) => item.id),
@@ -1698,7 +1672,6 @@ export class AgentSession {
       this.skillTurn.add(drained.flatMap((item) => item.skills))
       for (const item of drained) this.options.emit({ type: 'message-injected', ...queuedUserMessage(item) })
     }
-    return { userInput: drained.length > 0, resumesPlan }
   }
 
   /** 当前 turn 只消费立即插话和内部通知，普通排队请求留到回合结束。 */
@@ -1709,8 +1682,7 @@ export class AgentSession {
     rootInputId?: string,
     skills: readonly ActivatedSkill[] = [],
     initialTaskNotifications: readonly QueuedTaskNotification[] = [],
-    resumeTaskPlanFromNotification = false,
-    inputSource: 'user' | 'internal' = 'user',
+    inputSource: 'user' | 'internal' | 'notification' = 'user',
   ): Promise<StopReason> {
     const { emit } = this.options
     this.abortRequestedDuringFinalization = false
@@ -1718,7 +1690,7 @@ export class AgentSession {
     this.activeSubagentTurnState = null
     this.deliveredSubagentActivations.clear()
     // 用户请求及其协商执行阶段可以读取历史结果，后台任务通知不获得此授权。
-    this.pendingSubagentResults = resumeTaskPlanFromNotification || this.protocolRound || this.options.promptContext.discussion
+    this.pendingSubagentResults = inputSource === 'notification' || this.protocolRound || this.options.promptContext.discussion
       ? null : this.options.pendingSubagentSettlements?.()[Symbol.asyncIterator]() ?? null
     const turnId = crypto.randomUUID()
     const initialMessageCount = this.messages.length
@@ -1743,45 +1715,14 @@ export class AgentSession {
         deliveredInputs = [...retained, ...deliveredInputs]
       }
     }
-    const resumesUserQuestion = answersPlanQuestion(this.pendingQuestions, initialMessages, this.taskPlan?.snapshot?.id)
-    const notificationContinuationPlanId = resumeTaskPlanFromNotification
-      ? initialTaskNotifications
-          .map((item) => item.notification.engagedPlanId)
-          .find((planId) => planId === this.taskPlan?.snapshot?.id)
-      : undefined
-    const resumesTaskNotification = Boolean(
-      notificationContinuationPlanId
-      && !this.taskPlan?.stateSnapshot.resumeRequired,
-    )
-    let planExecutionEngaged = (resumesUserQuestion || resumesTaskNotification)
-      && Boolean(this.taskPlan?.snapshot)
-      && !this.taskPlan?.stateSnapshot.resumeRequired
-    const notificationContinuation = resumesTaskNotification
-      && notificationContinuationPlanId
-      ? createTaskContextMessage(this.taskPlan!.stateSnapshot, {
-          turnId,
-          engagedPlanId: notificationContinuationPlanId,
-        })
-      : null
-    const initialContext = this.taskPlan?.snapshot
-      ? planExecutionEngaged
-        ? [...(notificationContinuation ? [notificationContinuation] : []), ...initialMessages]
-        : [
-            createTaskExecutionBoundaryMessage(
-              this.taskPlan.stateSnapshot.resumeRequired ? 'interrupted' : 'dormant',
-            ),
-            ...initialMessages,
-          ]
-      : initialMessages
     // 先写稳回合和输入，再读取工作区；准备失败也必须有可恢复、可编辑的终态。
     this.activeTurn = { id: turnId, fileChanges: new Map() }
-    this.messages.push(...initialContext)
+    this.messages.push(...initialMessages)
     try {
       await this.persistRequired(
         (recorder) => recorder.recordTurnStart(
           turnId,
-          initialContext,
-          planExecutionEngaged ? this.taskPlan?.snapshot?.id : undefined,
+          initialMessages,
           deliveredInputs.filter((input) => input.persisted).map((input) => input.id),
           rootInputId,
           skills,
@@ -1814,7 +1755,7 @@ export class AgentSession {
       this.resolveIdleWaiters()
       return 'error'
     }
-    this.emitQuestionReplies(initialContext)
+    this.emitQuestionReplies(initialMessages)
     for (const item of deliveredInputs) this.activatePdfAttachments(item.pdfAttachments)
     this.rememberDeliveredSubagentNotifications(initialTaskNotifications)
     await this.confirmNotificationsDelivered(initialTaskNotifications, turnId)
@@ -1839,29 +1780,13 @@ export class AgentSession {
       let steps = 0
       let finishedNaturally = false
       let interruptionBoundaryConsumed = false
-      let steeringDecisionPending = false
-      let stepsSincePlanMutation = 0
-      let stepsSincePlanReminder = 0
-      // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
-      // 只有稳定提交 Create/Resume，或回答计划自身的问题卡，才接合计划执行生命周期。
       while (maxSteps === null || steps < maxSteps) {
         abortSignal.throwIfAborted()
         await this.refreshProjectInstructions()
-        if (
-          planExecutionEngaged
-          && this.taskPlan?.hasUnfinishedWork()
-          && stepsSincePlanMutation >= TASK_PROGRESS_REMINDER_STEPS
-          && stepsSincePlanReminder >= TASK_PROGRESS_REMINDER_STEPS
-        ) {
-          await this.injectTaskProgressReminder()
-          stepsSincePlanReminder = 0
-        }
         await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
         await this.loadPendingSubagentResults()
         if (this.hasMidTurnInput()) {
-          const injected = await this.injectQueuedMidTurn()
-          if (injected.userInput) steeringDecisionPending = true
-          if (injected.resumesPlan) planExecutionEngaged = true
+          await this.injectQueuedMidTurn()
           await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
         }
         const subagentState = await this.subagentTurnState(turnId)
@@ -1873,32 +1798,12 @@ export class AgentSession {
         const step = await this.runOneStep(
           usage,
           abortSignal,
-          planExecutionEngaged,
           interruptedBoundaryPending
             && !interruptionBoundaryConsumed
             && !this.options.promptContext.discussion
             && !this.protocolRound,
-          steeringDecisionPending || hasOutstandingSubagentActivations(subagentState),
         )
-        // UpdateTaskItem 只是把暂停前的真实进度写稳；让下一次最终文本继续决定是否结束。
-        // 其它任何工具均表示模型选择继续实质处理，仍按原逻辑消费本窗口。
-        steeringDecisionPending = steeringDecisionPending
-          && step.hadOnlyTaskProgressUpdates
         if (step.interruptionBoundaryConsumed) interruptionBoundaryConsumed = true
-        if (step.taskPlanChanged) {
-          planExecutionEngaged = Boolean(this.taskPlan?.snapshot)
-          stepsSincePlanMutation = 0
-          stepsSincePlanReminder = 0
-        } else if (step.committed && planExecutionEngaged) {
-          stepsSincePlanMutation++
-          stepsSincePlanReminder++
-        }
-        const engagement = step.taskPlanEngagement
-        if (engagement && engagement.planId === this.taskPlan?.snapshot?.id) {
-          planExecutionEngaged = true
-          stepsSincePlanMutation = 0
-          stepsSincePlanReminder = 0
-        }
         if (step.endedByTool) {
           if (abortSignal.aborted) this.abortRequestedDuringFinalization = true
           endedByTool = true
@@ -1909,7 +1814,6 @@ export class AgentSession {
         if (abortSignal.aborted && this.hasPendingMessages()) {
           if (
             !step.hadToolCalls
-            && !planExecutionEngaged
             && !hasOutstandingSubagentActivations(subagentState)
           ) {
             this.abortRequestedDuringFinalization = true
@@ -1922,9 +1826,7 @@ export class AgentSession {
         }
         await this.loadPendingSubagentResults()
         if (this.hasMidTurnInput()) {
-          const injected = await this.injectQueuedMidTurn()
-          if (injected.userInput) steeringDecisionPending = true
-          if (injected.resumesPlan) planExecutionEngaged = true
+          await this.injectQueuedMidTurn()
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
         if (abortSignal.aborted && step.hadToolCalls) {
@@ -1961,11 +1863,7 @@ export class AgentSession {
             stopReason = 'waiting-user'
             break
           }
-          if (step.awaitingTaskPlanContinuation) {
-            stopReason = 'paused'
-            finishedNaturally = true
-            break
-          }
+          if (this.taskPlan?.hasActivePlan && this.options.hasPendingCommandWake?.(turnId)) stopReason = 'paused'
           finishedNaturally = true
           break
         }
@@ -2008,20 +1906,9 @@ export class AgentSession {
     }
     if (stopReason === 'aborted') {
       const interruptionReason = turnAbortReason(abortSignal)
-      const interruptedState = planExecutionEngaged
-        ? this.taskPlan?.interrupt(interruptionReason) ?? null
-        : null
-      const markers: ModelMessage[] = [
-        createTurnAbortedMessage(interruptionReason, this.turnInterruptionContext ?? undefined),
-      ]
-      if (interruptedState) {
-        const taskContext = createTaskContextMessage(interruptedState)
-        if (taskContext) markers.push(taskContext)
-      }
-      this.messages.push(...markers)
-      await this.persist((recorder) =>
-        recorder.recordStep(turnId, markers, interruptedState ?? undefined, null),
-      )
+      const marker = createTurnAbortedMessage(interruptionReason, this.turnInterruptionContext ?? undefined)
+      this.messages.push(marker)
+      await this.persist(recorder => recorder.recordStep(turnId, [marker]))
     }
     try { await this.options.browser?.finishTurn(turnId) }
     catch (error) {
@@ -2105,28 +1992,6 @@ export class AgentSession {
     }
   }
 
-  private async injectTaskProgressReminder(): Promise<void> {
-    const plan = this.taskPlan?.snapshot
-    if (!plan) return
-    const current = plan.items.find((item) => item.status === 'in_progress')
-    const reminder: ModelMessage = {
-      role: 'user',
-      content: [
-        '<system-reminder>',
-        `计划 ${plan.id} 已有 ${TASK_PROGRESS_REMINDER_STEPS} 个模型步骤没有更新。`,
-        current ? `当前任务项：${current.id} ${current.outcome}。` : '',
-        '若进度或任务项已实质变化，请更新计划；若复杂测试或排查尚无结论，继续工作即可，不要制造进度。',
-        '不要向用户提及本提醒。',
-        '</system-reminder>',
-      ].filter(Boolean).join('\n'),
-    }
-    this.messages.push(reminder)
-    if (this.activeTurn) {
-      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, [reminder]))
-    }
-  }
-
-  /** 手动先全量摘要；只有摘要请求超限时才退为保留尾部，不运行微压缩。 */
   async compactNow(startedCompactionId?: string): Promise<void> {
     const { emit } = this.options
     if (this.isBusy || this.messages.length < 2) {
@@ -2151,7 +2016,7 @@ export class AgentSession {
       await this.refreshProjectInstructions()
       const tools = this.buildToolSet(signal, { emit, loopHealth: this.loopHealth },
         this.options.mcpRuntime?.toolDefinitions(this.messages) ?? [])
-      completed = await this.runFullCompaction('manual', signal, toolsForModel(tools), false, async (messages) => {
+      completed = await this.runFullCompaction('manual', signal, toolsForModel(tools), async (messages) => {
         const postTokens = this.estimateCurrentContextTokens(messages, undefined, null)
         await this.commitCompaction(messages, signal, { type: 'context-compacted', level: 'full', compactionId, preTokens, postTokens })
         this.emitContextUsage(undefined, postTokens)
@@ -2188,7 +2053,6 @@ export class AgentSession {
   private async compactIfNeeded(
     prepared: PreparedRequestContext,
     abortSignal: AbortSignal,
-    planExecutionEngaged: boolean,
     force: boolean,
     tools: ToolSet | undefined,
   ): Promise<PreparedRequestContext> {
@@ -2216,13 +2080,13 @@ export class AgentSession {
       }
     }
 
-    return await this.runFullCompaction('auto', abortSignal, tools, planExecutionEngaged,
+    return await this.runFullCompaction('auto', abortSignal, tools,
       (messages, id) => this.commitAutoCompaction('full', request, abortSignal, messages, id)) ?? request
   }
 
   private async runFullCompaction<T>(
     mode: 'auto' | 'manual', abortSignal: AbortSignal, tools: ToolSet | undefined,
-    planExecutionEngaged: boolean, commit: (messages: ModelMessage[], compactionId: string) => Promise<T>,
+    commit: (messages: ModelMessage[], compactionId: string) => Promise<T>,
     compactionId: string = randomUUID(),
   ): Promise<T | null> {
     const { emit } = this.options
@@ -2231,7 +2095,7 @@ export class AgentSession {
       const result = await compactMessages({
         model: this.createLanguageModel(), messages: this.messages, capabilities: this.currentModelSelection().model.capabilities,
         abortSignal, mode, tools,
-        applicationContext: this.compactApplicationContext(planExecutionEngaged, this.activeTurn?.id),
+        applicationContext: this.compactApplicationContext(),
         prepareMessagesForModel: messages => this.messagesForCurrentModel(messages, abortSignal, false),
         providerOptions: this.requestProviderOptions(),
         onSummaryRequest: () => {
@@ -2315,19 +2179,9 @@ export class AgentSession {
     })
   }
 
-  private compactApplicationContext(
-    planExecutionEngaged = false,
-    turnId?: string,
-  ): string | undefined {
+  private compactApplicationContext(): string | undefined {
     const state = this.taskPlan?.stateSnapshot
-    const taskContext = state && state.version > 0
-      ? taskContextBlock(
-          state,
-          planExecutionEngaged && turnId && state.activePlan
-            ? { turnId, engagedPlanId: state.activePlan.id }
-            : undefined,
-        )
-      : undefined
+    const taskContext = state && state.version > 0 ? taskStateBlock(state) : undefined
     const pdfContext = compactPdfAttachmentContext(this.sessionPdfAttachments(), recentUserPdfIds(this.messages))
     const sections = [taskContext, pdfContext].filter(
       (section): section is string => Boolean(section),
@@ -2380,12 +2234,11 @@ export class AgentSession {
     abortSignal.throwIfAborted()
     const subagentCatalogReminder = this.subagentCatalog
       ? subagentCatalogUpdate(history, this.subagentCatalog) : null
-    const dateReminder = currentDateReminder(history, new Date())
-    const persistentMessages = [
-      ...history,
-      ...(subagentCatalogReminder ? [subagentCatalogReminder] : []),
-      ...(dateReminder ? [dateReminder] : []),
-    ]
+    const planReminder = this.taskPlan && !this.protocolRound && !this.options.promptContext.discussion
+      ? this.taskPlan.progressReminder(history) : null
+    const reminders = [subagentCatalogReminder, currentDateReminder(history, new Date()), planReminder]
+      .filter((message): message is ModelMessage => message !== null)
+    const persistentMessages = [...history, ...reminders]
     const subagentMessage = this.activeSubagentTurnState
       ? createSubagentTurnStateMessage(this.activeSubagentTurnState)
       : null
@@ -2396,8 +2249,7 @@ export class AgentSession {
     const persistentTokens = estimateMessagesTokens(persistentMessages)
     const requestProjectionDelta = estimateMessagesTokens(messages) - persistentTokens
     return {
-      dateReminder,
-      subagentCatalogReminder,
+      reminders,
       persistentMessages,
       messages,
       projectionDelta: estimateMessagesTokens(this.projectContextMessages(persistentMessages)) - persistentTokens,
@@ -2511,9 +2363,7 @@ export class AgentSession {
   private async runOneStep(
     usage: UsageInfo,
     turnAbortSignal: AbortSignal,
-    planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
-    preserveTaskPlanOnFinalText: boolean,
   ): Promise<StepResult> {
     const { emit } = this.options
     let uncommittedStepFailed = false
@@ -2536,8 +2386,7 @@ export class AgentSession {
       }, async (stepAbort) => {
         const attempt = (recovery?: { error: ModelContextOverflowError; onRetry: () => void }) =>
           this.runOneStepAttempt(
-            usage, stepAbort, planExecutionEngaged, consumeInterruptionBoundary,
-            preserveTaskPlanOnFinalText, (text) => {
+            usage, stepAbort, consumeInterruptionBoundary, (text) => {
               uncommittedStepFailed = true
               failedOutput = text
             }, recovery,
@@ -2560,14 +2409,9 @@ export class AgentSession {
       discardFailedStep(error !== 'interrupt')
       if (error !== 'interrupt') throw error
       return {
-        committed: false,
         hadToolCalls: false,
-        hadOnlyTaskProgressUpdates: false,
         endedByTool: false,
-        taskPlanChanged: false,
-        taskPlanEngagement: null,
         interruptionBoundaryConsumed: false,
-        awaitingTaskPlanContinuation: false,
       }
     }
   }
@@ -2601,9 +2445,7 @@ export class AgentSession {
   private async runOneStepAttempt(
     usage: UsageInfo,
     stepAbort: AbortController,
-    planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
-    preserveTaskPlanOnFinalText: boolean,
     onUncommittedFailure: (text: string) => void,
     recovery?: { error: ModelContextOverflowError; onRetry: () => void },
   ): Promise<StepResult> {
@@ -2612,13 +2454,7 @@ export class AgentSession {
     }
     const { emit } = this.options
 
-    const stepControl: {
-      endedByTool: boolean
-      taskPlanEngagement: TaskPlanEngagementAction | null
-    } = {
-      endedByTool: false,
-      taskPlanEngagement: null,
-    }
+    let endedByTool = false
     const asked = new Map<string, UserQuestionItem[]>()
     const stepAttachments = new ToolStepAttachments(this.options.sessionRecorder, this.imageAttachments, this.pdfAttachments)
     let stepCommitted = false
@@ -2648,10 +2484,8 @@ export class AgentSession {
         loopHealth: this.loopHealth,
         onToolExecutionStart: (id) => toolExecution!.start(id),
         onToolExecutionEnd: (event) => toolExecution!.finish(event),
-        planExecutionEngaged,
-        onTaskPlanEngagement: (action) => { stepControl.taskPlanEngagement = action },
         onUserQuestion: (id, items) => { asked.set(id, items) },
-        onTurnEndingTool: () => { stepControl.endedByTool = true },
+        onTurnEndingTool: () => { endedByTool = true },
         onImageAttachments: (id, attachments, transform, limit) =>
           stepAttachments.acceptImages(id, attachments, transform, limit),
         onPdfAttachments: (id, attachments) => stepAttachments.acceptPdfs(id, attachments),
@@ -2670,7 +2504,7 @@ export class AgentSession {
       const prepared = await this.prepareRequestContext(stepAbort.signal)
       this.emitContextUsage(prepared.messages, prepared.usedTokens)
       const request = await this.compactIfNeeded(
-        prepared, stepAbort.signal, planExecutionEngaged, Boolean(recovery), toolsForModel(requestTools),
+        prepared, stepAbort.signal, Boolean(recovery), toolsForModel(requestTools),
       )
       if (recovery) {
         if (estimateMessagesTokens(request.messages) >= estimateMessagesTokens(prepared.messages)) {
@@ -2683,11 +2517,7 @@ export class AgentSession {
       }
       stepAbort.signal.throwIfAborted()
       toolContext.subagentDefinitions = this.subagentCatalog?.definitions
-      const { dateReminder, subagentCatalogReminder, persistentMessages: persistentInputMessages, messages: requestMessages } = request
-      const requestReminders = [
-        ...(subagentCatalogReminder ? [subagentCatalogReminder] : []),
-        ...(dateReminder ? [dateReminder] : []),
-      ]
+      const { reminders: requestReminders, persistentMessages: persistentInputMessages, messages: requestMessages } = request
       const result = streamText({
         maxRetries: 0,
         onError: () => {},
@@ -2701,7 +2531,6 @@ export class AgentSession {
       })
 
       let hadToolCalls = false
-      let hadNonProgressToolCalls = false
       let thinkingStartedAt: number | null = null
       let stepTotalTokens = 0
       let finishReason: string | null = null
@@ -2729,7 +2558,6 @@ export class AgentSession {
           case 'tool-call':
             if (part.providerExecuted === true) break
             hadToolCalls = true
-            if (part.toolName !== UPDATE_TASK_ITEM_TOOL_NAME) hadNonProgressToolCalls = true
             break
           case 'finish':
             finishReason = part.finishReason
@@ -2782,7 +2610,7 @@ export class AgentSession {
           abort: stepAbort,
           emit,
           recordStart: (startedToolCallId) => this.persistRequired(
-            (recorder) => recorder.recordStep(this.activeTurn!.id, [], undefined, undefined, { startedToolCallId }),
+            (recorder) => recorder.recordStep(this.activeTurn!.id, [], undefined, { startedToolCallId }),
             '登记工具执行',
           ),
           recordResult: async (message, event) => {
@@ -2790,16 +2618,13 @@ export class AgentSession {
             const taskState = this.taskPlan?.stateSnapshot
             const changedTaskState = taskState?.version !== durableTaskState?.version ? taskState : undefined
             const items = asked.get(event.toolUseId)
-            const planId = (planExecutionEngaged || stepControl.taskPlanEngagement || changedTaskState) && taskState?.activePlan?.id
-            const question = items && !event.isError
-              ? { id: event.toolUseId, questions: items, ...(planId ? { planId } : {}) } : undefined
+            const question = items && !event.isError ? { id: event.toolUseId, questions: items } : undefined
             if (question) messages[0] = withQuestionBatch(messages[0]!, question)
             this.assertImageAttachmentsCompatible(attachments)
             this.assertPdfAttachmentsCompatible(pdfAttachments)
             await this.persistRequired(
               (recorder) => recorder.recordStep(
                 this.activeTurn!.id, messages, changedTaskState,
-                changedTaskState ? changedTaskState.activePlan?.id ?? null : stepControl.taskPlanEngagement?.planId,
                 { attachments, pdfAttachments },
               ),
               '保存工具结果',
@@ -2813,40 +2638,15 @@ export class AgentSession {
           },
         })
         await toolExecution.run(requestTools)
-        if (stepAbort.signal.aborted) stepControl.endedByTool = false
+        if (stepAbort.signal.aborted) endedByTool = false
       }
-      let awaitingTaskPlanContinuation = false
-      let taskPlanClosedNaturally = false
-      if (
-        !hadToolCalls
-        && planExecutionEngaged
-        && !pendingUserQuestions(this.messages).some(question => question.planId === this.taskPlan?.snapshot?.id)
-        && !preserveTaskPlanOnFinalText
-        && !this.hasMidTurnInput()
-      ) {
-        const activePlan = this.taskPlan?.snapshot
-        if (activePlan) {
-          awaitingTaskPlanContinuation = this.taskPlan!.hasUnfinishedWork()
-            && Boolean(this.options.hasPendingTaskPlanContinuation?.(activePlan.id))
-          if (!awaitingTaskPlanContinuation) {
-            const finalized = this.taskPlan!.finishNaturalRun()
-            if (!finalized.ok) throw new Error(finalized.message)
-            taskPlanClosedNaturally = true
-          }
-        }
+      if (!hadToolCalls && !this.protocolRound && !this.options.promptContext.discussion) {
+        this.taskPlan?.finishIfComplete()
       }
       const taskPlanCommit = this.taskPlan?.commitStep()
-      const naturallyClosedTaskState = taskPlanClosedNaturally
-        ? taskPlanCommit?.state
-        : undefined
-      if (taskPlanClosedNaturally && !naturallyClosedTaskState) {
-        throw new Error('自然结束任务计划后未生成状态提交')
-      }
       taskPlanFinalized = Boolean(this.taskPlan)
       const internalMarkers: ModelMessage[] = []
-      if (naturallyClosedTaskState) {
-        internalMarkers.push(createTaskStateMessage(naturallyClosedTaskState))
-      }
+      if (!hadToolCalls && taskPlanCommit) internalMarkers.push(createTaskStateMessage(taskPlanCommit.state))
       if (consumeInterruptionBoundary) {
         internalMarkers.push(createTurnAbortedConsumedMessage())
       }
@@ -2858,15 +2658,11 @@ export class AgentSession {
         ...internalMarkers,
         ...mcpCommitMessages,
       ])
-      const engagementUpdate = taskPlanCommit
-        ? taskPlanCommit.state.activePlan?.id ?? null
-        : stepControl.taskPlanEngagement?.planId
       await this.persistRequired(
         (recorder) => recorder.recordStep(
           this.activeTurn!.id,
           committedMessages,
           taskPlanCommit?.state,
-          engagementUpdate,
         ),
         '提交模型步骤',
       )
@@ -2897,14 +2693,9 @@ export class AgentSession {
       this.lastFinishReason = finishReason
       this.emitContextUsage()
       return {
-        committed: true,
         hadToolCalls,
-        hadOnlyTaskProgressUpdates: hadToolCalls && !hadNonProgressToolCalls,
-        endedByTool: stepControl.endedByTool,
-        taskPlanChanged: taskPlanCommit !== undefined,
-        taskPlanEngagement: stepControl.taskPlanEngagement,
+        endedByTool,
         interruptionBoundaryConsumed: consumeInterruptionBoundary,
-        awaitingTaskPlanContinuation,
       }
     } catch (error) {
       mcpStep?.discard()
@@ -2934,10 +2725,7 @@ export class AgentSession {
     const taskTools = this.taskPlan
       && !this.options.promptContext.discussion
       && !this.protocolRound
-      ? createTaskPlanTools(this.taskPlan, {
-          onEngagementAction: (action) => context.onTaskPlanEngagement?.(action),
-          isEngaged: () => context.planExecutionEngaged === true,
-        })
+      ? createTaskPlanTools(this.taskPlan)
       : []
     const questionTools: ToolDefinition[] =
       this.userQuestionsEnabled
@@ -3015,7 +2803,7 @@ export class AgentSession {
     abortSignal: AbortSignal,
     context: ToolStepContext,
   ): StepToolSet | undefined {
-    const { emit, loopHealth, planExecutionEngaged, allowedToolNames } = context
+    const { emit, loopHealth, allowedToolNames } = context
     const model = this.currentModelSelection().model
     const toolProjectDir = this.options.promptContext.projectDir
     if (defs.length === 0) return undefined
@@ -3064,9 +2852,6 @@ export class AgentSession {
           ...(this.activeTurn ? { turnId: this.activeTurn.id } : {}),
           toolCallId,
           subagentDefinitions: context.subagentDefinitions,
-          ...(planExecutionEngaged && this.taskPlan?.snapshot
-            ? { engagedPlanId: this.taskPlan.snapshot.id }
-            : {}),
         }
         const parsed = await validateToolInput(def, input)
         if (!parsed.success) {

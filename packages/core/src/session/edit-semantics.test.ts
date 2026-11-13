@@ -25,7 +25,6 @@ describe('编辑与根输入身份校验', () => {
       type: 'turn-start',
       parentUuid: secondRoot.uuid,
       turnId: 'turn-cross-branch',
-      engagedPlanId: null,
       rootInputId: firstRoot.uuid,
     })
 
@@ -42,7 +41,6 @@ describe('编辑与根输入身份校验', () => {
       parentUuid: null,
       reason: 'rollback',
       activeTurnId: null,
-      activeTurnEngagedPlanId: null,
       activeConsensusTaskId: null,
       activeConsensusBaseMessages: null,
       activeConsensusBaseTaskState: null,

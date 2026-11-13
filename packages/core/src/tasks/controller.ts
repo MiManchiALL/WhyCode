@@ -1,9 +1,10 @@
+import type { ModelMessage } from 'ai'
+import { taskProgressReminder } from './reminder.ts'
 import {
   activeTaskPlanSchema,
   cloneActiveTaskPlan,
   cloneTaskPlanState,
   emptyTaskPlanState,
-  interruptTaskPlanState,
   taskPlanSchema,
   type ActiveTaskPlan,
   type TaskItem,
@@ -27,11 +28,7 @@ export type TaskPlanTransition =
 
 export type TaskMutationError =
   | 'step_conflict'
-  | 'active_plan_exists'
   | 'no_active_plan'
-  | 'plan_id_mismatch'
-  | 'resume_required'
-  | 'not_engaged'
   | 'invalid_plan'
   | 'item_not_found'
   | 'invalid_transition'
@@ -60,12 +57,19 @@ export interface TaskPlanCommit {
 export class TaskPlanController {
   private state: TaskPlanState
   private stepSnapshot: TaskPlanState | null = null
-  private stepDirty = false
   private stepBoundary: 'create' | 'close' | null = null
   private pendingDisplayPlan: TaskPlan | null = null
 
   constructor(initialState: TaskPlanState = emptyTaskPlanState()) {
     this.state = cloneTaskPlanState(initialState)
+  }
+
+  get hasActivePlan(): boolean {
+    return this.state.activePlan !== null
+  }
+
+  progressReminder(messages: readonly ModelMessage[]): ModelMessage | null {
+    return taskProgressReminder(messages, this.state.activePlan)
   }
 
   get snapshot(): ActiveTaskPlan | null {
@@ -78,13 +82,12 @@ export class TaskPlanController {
 
   beginStep(): void {
     this.stepSnapshot = cloneTaskPlanState(this.state)
-    this.stepDirty = false
     this.stepBoundary = null
     this.pendingDisplayPlan = null
   }
 
   commitStep(): TaskPlanCommit | undefined {
-    const update = this.stepDirty && this.pendingDisplayPlan
+    const update = this.pendingDisplayPlan
       ? {
           state: cloneTaskPlanState(this.state),
           plan: taskPlanSchema.parse(this.pendingDisplayPlan),
@@ -95,7 +98,7 @@ export class TaskPlanController {
   }
 
   discardStep(): void {
-    if (this.stepDirty && this.stepSnapshot) this.state = cloneTaskPlanState(this.stepSnapshot)
+    if (this.pendingDisplayPlan && this.stepSnapshot) this.state = cloneTaskPlanState(this.stepSnapshot)
     this.resetStep()
   }
 
@@ -105,20 +108,12 @@ export class TaskPlanController {
   }
 
   create(goal: string, drafts: TaskPlanDraftItem[]): TaskMutationResult {
-    if (this.stepDirty) {
+    if (this.pendingDisplayPlan) {
       return mutationFailure('step_conflict', 'CreateTaskPlan 必须作为本步骤唯一的计划变更。')
-    }
-    if (this.state.activePlan) {
-      return mutationFailure(
-        'active_plan_exists',
-        '当前已有活动计划；继续时先 ResumeTaskPlan，不再执行时先 CloseTaskPlan。',
-      )
     }
     const next = this.buildPlan(goal, drafts)
     if ('error' in next) return mutationFailure('invalid_plan', next.error)
     this.state.activePlan = next.plan
-    this.state.resumeRequired = false
-    this.state.interruptionReason = null
     this.stepBoundary = 'create'
     this.publish(next.plan)
     return {
@@ -136,7 +131,6 @@ export class TaskPlanController {
     }
     const current = this.state.activePlan
     if (!current) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
-    if (this.state.resumeRequired) return this.resumeRequiredError()
     if (changes.length === 0 && !transition) {
       return mutationFailure('no_state_change', '必须提供任务项变化或状态更新。')
     }
@@ -177,7 +171,7 @@ export class TaskPlanController {
   }
 
   close(): TaskMutationResult {
-    if (this.stepDirty) {
+    if (this.pendingDisplayPlan) {
       return mutationFailure('step_conflict', 'CloseTaskPlan 必须作为本步骤唯一的计划变更。')
     }
     const plan = this.state.activePlan
@@ -186,48 +180,9 @@ export class TaskPlanController {
     return { ok: true, message: '任务计划已结束。' }
   }
 
-  /** 模型正文自然结束时，由会话协议在同一步事务内确定计划终态。 */
-  finishNaturalRun(): TaskMutationResult {
-    if (this.stepDirty) {
-      return mutationFailure('step_conflict', '当前模型步骤已有计划变更，不能同时自然结束计划。')
-    }
+  finishIfComplete(): void {
     const plan = this.state.activePlan
-    if (!plan) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
-    const status = plan.items.every((item) => item.status === 'completed')
-      ? 'completed'
-      : 'ended'
-    this.finish(plan, status)
-    return {
-      ok: true,
-      message: status === 'completed' ? '任务计划已核验完成。' : '任务计划已随本次执行结束。',
-    }
-  }
-
-  resume(planId: string): TaskMutationResult {
-    const plan = this.state.activePlan
-    if (!plan) return mutationFailure('no_active_plan', '当前没有未结束的任务计划。')
-    if (plan.id !== planId) {
-      return mutationFailure('plan_id_mismatch', '计划 ID 已变化，请读取最新任务状态。')
-    }
-    if (this.state.resumeRequired) {
-      this.state.resumeRequired = false
-      this.state.interruptionReason = null
-      this.publish(plan)
-    }
-    return { ok: true, message: '当前执行已接合活动计划。' }
-  }
-
-  interrupt(
-    reason: NonNullable<TaskPlanState['interruptionReason']>,
-  ): TaskPlanState | null {
-    if (!this.state.activePlan) return null
-    if (this.state.resumeRequired && this.state.interruptionReason === reason) return null
-    this.state = interruptTaskPlanState(this.state, reason)
-    return this.stateSnapshot
-  }
-
-  hasUnfinishedWork(): boolean {
-    return Boolean(this.state.activePlan?.items.some((item) => item.status !== 'completed'))
+    if (plan?.items.every(item => item.status === 'completed')) this.finish(plan, 'completed')
   }
 
   private applyItemChange(
@@ -366,30 +321,19 @@ export class TaskPlanController {
       revision: plan.revision + 1,
     })
     this.state.activePlan = null
-    this.state.resumeRequired = false
-    this.state.interruptionReason = null
     this.stepBoundary = 'close'
     this.publish(closed)
   }
 
   private publish(plan: TaskPlan): void {
     this.state.version++
-    this.stepDirty = true
     this.pendingDisplayPlan = taskPlanSchema.parse(plan)
   }
 
   private resetStep(): void {
     this.stepSnapshot = null
-    this.stepDirty = false
     this.stepBoundary = null
     this.pendingDisplayPlan = null
-  }
-
-  private resumeRequiredError(): TaskMutationResult {
-    return mutationFailure(
-      'resume_required',
-      '任务执行已被中断；继续时先调用 ResumeTaskPlan，不再执行时调用 CloseTaskPlan。',
-    )
   }
 
   private buildPlan(

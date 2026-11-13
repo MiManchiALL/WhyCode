@@ -86,7 +86,7 @@ export function createCommandTools(
       const handoff = await manager.armTerminalNotification(
         sessionId,
         task.id,
-        ctx.engagedPlanId,
+        ctx.turnId,
       )
       if (!handoff.armed) {
         const offset = Math.max(0, handoff.task.outputBytes - 64 * 1024)

@@ -141,7 +141,7 @@ describe('WebFetch Agent 链路', () => {
       let checkedCrashBoundary = false
       journal.recordStep = async (...args) => {
         await originalRecord(...args)
-        if (args[4]?.pdfAttachments?.length) {
+        if (args[3]?.pdfAttachments?.length) {
           const interrupted = await store.open(journal.sessionId)
           assert.equal(referencedPdfAttachmentIds(interrupted.initialMessages).has(attachment.id), true)
           checkedCrashBoundary = true

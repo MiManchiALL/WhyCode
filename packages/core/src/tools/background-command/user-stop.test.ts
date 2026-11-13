@@ -18,7 +18,7 @@ const OTHER_SESSION = '22222222-2222-4222-8222-222222222222'
 for (const wakeOnCompletion of [false, true]) {
   it(`用户停止只通知一次并持久保留来源，wakeOnCompletion=${wakeOnCompletion}`, async t => {
     const env = await fixture(t)
-    if (wakeOnCompletion) await env.manager.armTerminalNotification(SESSION, env.task.id, 'plan-id')
+    if (wakeOnCompletion) await env.manager.armTerminalNotification(SESSION, env.task.id, 'turn-id')
     const [stopped, concurrent] = await Promise.all([
       env.manager.stop(SESSION, env.task.id, { source: 'user' }),
       env.manager.stop(SESSION, env.task.id, { source: 'model', detail: '不能覆盖用户原因' }),
@@ -29,8 +29,7 @@ for (const wakeOnCompletion of [false, true]) {
     assert.equal(env.terminateCalls(), 1)
     assert.equal(env.notifications.length, 1)
     assert.deepEqual(env.notifications[0]?.task, stopped)
-    assert.equal(env.notifications[0]?.engagedPlanId, wakeOnCompletion ? 'plan-id' : undefined)
-    assert.equal(env.manager.hasPendingPlanContinuation(SESSION, 'plan-id'), false)
+    assert.equal(env.manager.hasPendingCommandWake(SESSION, 'turn-id'), false)
     assert.deepEqual(env.states.map(s => s.tasks[0]?.status).filter((status, i, values) => status !== values[i - 1]),
       ['running', 'stopping', 'stopped'])
 
@@ -166,7 +165,7 @@ it('模型先停止时保留模型原因；应用退出清理均不产生用户�
   ])
   assert.deepEqual(model, user)
   assert.equal(model.failureReason, '模型主动停止：完成检查')
-  assert.equal(env.manager.hasPendingPlanContinuation(SESSION, 'plan-id'), false)
+  assert.equal(env.manager.hasPendingCommandWake(SESSION, 'turn-id'), false)
   assert.equal(env.notifications.length, 0)
 
   const shutdown = await fixture(t)

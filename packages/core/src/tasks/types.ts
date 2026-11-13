@@ -75,17 +75,6 @@ export type TaskPlan = z.infer<typeof taskPlanSchema>
 export const taskPlanStateSchema = z.object({
   version: z.number().int().nonnegative(),
   activePlan: activeTaskPlanSchema.nullable(),
-  resumeRequired: z.boolean(),
-  interruptionReason: z
-    .enum(['user-cancel', 'process-interruption', 'consensus-failure'])
-    .nullable(),
-}).strict().superRefine((state, ctx) => {
-  if (state.resumeRequired !== Boolean(state.interruptionReason)) {
-    ctx.addIssue({ code: 'custom', message: 'resumeRequired 与 interruptionReason 必须同时存在或清空' })
-  }
-  if (!state.activePlan && state.resumeRequired) {
-    ctx.addIssue({ code: 'custom', message: '没有 activePlan 时不能要求恢复' })
-  }
 })
 
 export type TaskPlanState = z.infer<typeof taskPlanStateSchema>
@@ -99,24 +88,9 @@ export function emptyTaskPlanState(): TaskPlanState {
   return {
     version: 0,
     activePlan: null,
-    resumeRequired: false,
-    interruptionReason: null,
   }
 }
 
 export function cloneTaskPlanState(state: TaskPlanState): TaskPlanState {
   return taskPlanStateSchema.parse(state)
-}
-
-export function interruptTaskPlanState(
-  state: TaskPlanState,
-  reason: NonNullable<TaskPlanState['interruptionReason']>,
-): TaskPlanState {
-  const next = cloneTaskPlanState(state)
-  if (!next.activePlan) return next
-  if (next.resumeRequired && next.interruptionReason === reason) return next
-  next.version++
-  next.resumeRequired = true
-  next.interruptionReason = reason
-  return taskPlanStateSchema.parse(next)
 }

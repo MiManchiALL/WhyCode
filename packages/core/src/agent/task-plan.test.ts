@@ -17,19 +17,16 @@ import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
   createTaskPlanTools,
-  RESUME_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
+import { isTaskProgressReminder } from '../tasks/reminder.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { validateToolInput } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
 describe('Main 长任务端到端控制', () => {
   it('UpdateTaskItem 只接受扁平严格的新协议', async () => {
-    const update = createTaskPlanTools(new TaskPlanController(), {
-      isEngaged: () => true,
-      onEngagementAction: () => undefined,
-    }).find((tool) => tool.name === UPDATE_TASK_ITEM_TOOL_NAME)
+    const update = createTaskPlanTools(new TaskPlanController()).find((tool) => tool.name === UPDATE_TASK_ITEM_TOOL_NAME)
     assert.ok(update)
     const accepts = async (input: unknown) => (await validateToolInput(update, input)).success
 
@@ -91,7 +88,7 @@ describe('Main 长任务端到端控制', () => {
     assert.doesNotMatch(taskTools, /transition/)
     assert.match(JSON.stringify(model.doStreamCalls[1]), /交付可靠功能|T1/)
     assert.match(JSON.stringify(model.doStreamCalls[1]), /whycode-task-state/)
-    assert.match(JSON.stringify(model.doStreamCalls[1]), /whycode-task-execution/)
+    assert.doesNotMatch(taskTools, /ResumeTaskPlan/)
     assert.match(JSON.stringify(model.doStreamCalls[4]), /active_plan/)
     assert.doesNotMatch(JSON.stringify(model.doStreamCalls[4]), /historical_plans/)
     assert.match(JSON.stringify(model.doStreamCalls[4]), /completed/)
@@ -122,7 +119,7 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(updates.at(-1)?.type === 'task-plan-updated' && updates.at(-1)?.plan.status, 'completed')
   })
 
-  it('模型自然给出最终正文时结束未完成计划，只发布一次零状态边界', async () => {
+  it('最终正文与后续普通问答保留未完成计划', async () => {
     const model = modelWithSteps([
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '不能半途结束',
@@ -143,18 +140,18 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(result, 'completed')
     assert.equal(model.doStreamCalls.length, 2)
     assert.equal(events.some((event) => event.type === 'error'), false)
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
-    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 1)
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.goal, '不能半途结束')
+    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 0)
     const updates = events.filter((event) => event.type === 'task-plan-updated')
-    assert.equal(updates.at(-1)?.type === 'task-plan-updated' && updates.at(-1)?.plan.status, 'ended')
+    assert.deepEqual(updates.map(event => event.plan.status), ['active'])
 
     assert.equal(await session.handleUserMessage('后续普通问题一'), 'completed')
-    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 1)
+    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 0)
     assert.equal(await session.handleUserMessage('后续普通问题二'), 'completed')
-    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 1)
+    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 0)
   })
 
-  it('engaged 计划连续十个模型步骤未更新时注入轻提醒', async () => {
+  it('连续十个已提交步骤后在请求末尾提醒最新进度', async () => {
     const model = modelWithSteps([
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '完成长时间排查',
@@ -188,11 +185,52 @@ describe('Main 长任务端到端控制', () => {
     const { session } = createSession(model, 'E:\\workspace\\WhyCode')
 
     assert.equal(await session.handleUserMessage('完成一项复杂排查'), 'completed')
-    assert.match(JSON.stringify(model.doStreamCalls[11]), /已有 10 个模型步骤没有更新/)
-    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[10]), /已有 10 个模型步骤没有更新/)
+    assert.match(JSON.stringify(model.doStreamCalls[11]), /whycode-task-progress/)
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[10]), /whycode-task-progress/)
   })
 
-  it('engaged 自动压缩保留 canonical TaskState 和同一执行 continuation', async () => {
+  it('短回合与重启沿用提醒间隔，提醒包含当前清单且不会重复追加', async () => {
+    const model = modelWithSteps([
+      toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
+        goal: '验收跨回合功能',
+        items: [
+          { kind: 'work', outcome: '实现已提交' },
+          { kind: 'work', outcome: '调用已接通' },
+          { kind: 'verification', outcome: '验收已完成' },
+        ],
+      }),
+      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { item_id: 'T1', status: 'completed', evidence: ['提交通过检查'] }),
+      ...Array.from({ length: 10 }, () => finalStep('已回复。')),
+    ])
+    const { session } = createSession(model)
+    await session.handleUserMessage('开始验收')
+    for (let i = 1; i < 10; i++) await session.handleUserMessage('继续讨论')
+    assert.equal(session.captureMessageSnapshot().some(isTaskProgressReminder), false)
+
+    const nextModel = modelWithSteps([finalStep('已查看。'), finalStep('已回复。')])
+    const reopened = createSession(nextModel).session
+    reopened.restoreMessageSnapshot(session.captureMessageSnapshot())
+    reopened.restoreTaskStateSnapshot(session.captureTaskStateSnapshot()!)
+    await reopened.handleUserMessage('还剩哪些工作')
+    const tail = JSON.stringify(nextModel.doStreamCalls[0]?.prompt.at(-1))
+    assert.match(tail, /whycode-task-progress/)
+    const reminders = reopened.captureMessageSnapshot().filter(isTaskProgressReminder)
+    assert.equal(reminders.length, 1)
+    const body = String(reminders[0]!.content).split('\n')[2]!
+    assert.deepEqual(JSON.parse(body), {
+      goal: '验收跨回合功能',
+      items: [
+        { id: 'T1', status: 'completed', outcome: '实现已提交' },
+        { id: 'T2', status: 'in_progress', outcome: '调用已接通' },
+        { id: 'T3', status: 'pending', outcome: '验收已完成' },
+      ],
+    })
+    await reopened.handleUserMessage('换个问题')
+    assert.doesNotMatch(JSON.stringify(nextModel.doStreamCalls[1]?.prompt.at(-1)), /whycode-task-progress/)
+    assert.equal(reopened.captureMessageSnapshot().filter(isTaskProgressReminder).length, 1)
+  })
+
+  it('自动压缩重建最新任务计划并保留用户回答', async () => {
     const model = compactingModel([
       finalStep('已验证压缩续跑。'),
     ])
@@ -211,7 +249,7 @@ describe('Main 长任务端到端控制', () => {
             { label: 'macOS', description: '按 macOS 处理' },
           ],
         }],
-      }, activePlan().id),
+      }),
     ])
     const answer = '回答「你使用哪个系统？」：Windows'
 
@@ -219,36 +257,12 @@ describe('Main 长任务端到端控制', () => {
     const request = JSON.stringify(model.doStreamCalls[0]?.prompt)
     assert.match(request, /whycode-compact-summary/)
     assert.match(request, /whycode-task-state/)
-    assert.match(request, /whycode-task-continuation/)
     assert.match(request, new RegExp(activePlan().id))
-    assert.ok(request.indexOf('whycode-task-continuation') < request.indexOf(answer))
+    assert.ok(request.indexOf('whycode-task-state') < request.indexOf(answer))
     assert.doesNotMatch(request, /刚刚压缩完成，继续/)
   })
 
-  it('dormant、interrupted 和手动压缩都不会伪造 execution continuation', async () => {
-    for (const state of [
-      activeState(),
-      {
-        ...activeState(),
-        version: activeState().version + 1,
-        resumeRequired: true,
-        interruptionReason: 'user-cancel' as const,
-      },
-    ]) {
-      const model = compactingModel([finalStep('只回答当前问题。')])
-      const { session } = createSession(model)
-      session.restoreTaskStateSnapshot(state)
-      session.restoreMessageSnapshot([
-        { role: 'user', content: '更早的长对话' },
-        ...Array.from({ length: 3 }, (): ModelMessage => ({ role: 'assistant', content: 'x'.repeat(120_000) })),
-      ])
-
-      assert.equal(await session.handleUserMessage('TTL 是什么'), 'completed')
-      const request = JSON.stringify(model.doStreamCalls[0]?.prompt)
-      assert.match(request, /whycode-task-state/)
-      assert.doesNotMatch(request, /whycode-task-continuation/)
-    }
-
+  it('手动压缩保留活动计划', async () => {
     const manualModel = compactingModel([])
     const { session } = createSession(manualModel)
     session.restoreTaskStateSnapshot(activeState())
@@ -259,7 +273,6 @@ describe('Main 长任务端到端控制', () => {
     await session.compactNow()
     const manualContext = JSON.stringify(session.captureMessageSnapshot())
     assert.match(manualContext, /whycode-task-state/)
-    assert.doesNotMatch(manualContext, /whycode-task-continuation/)
   })
 
   it('完整压缩只重建曾产生过的当前 TaskState', async () => {
@@ -268,8 +281,6 @@ describe('Main 长任务端到端控制', () => {
     closedSession.restoreTaskStateSnapshot({
       version: 4,
       activePlan: null,
-      resumeRequired: false,
-      interruptionReason: null,
     })
     closedSession.restoreMessageSnapshot([
       { role: 'user', content: '手动压缩已结束任务的长对话' },
@@ -281,7 +292,6 @@ describe('Main 长任务端到端控制', () => {
     const closedContext = JSON.stringify(closedSession.captureMessageSnapshot())
     assert.match(closedContext, /whycode-task-state/)
     assert.match(closedContext, /active_plan\\?\":null/)
-    assert.doesNotMatch(closedContext, /whycode-task-continuation/)
 
     const untouchedModel = compactingModel([])
     const { session: untouchedSession } = createSession(untouchedModel)
@@ -322,14 +332,12 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(model.doStreamCalls.length, 1)
     assert.equal(session.captureTaskStateSnapshot()?.activePlan?.goal, '完成旧的复杂任务')
     const request = JSON.stringify(model.doStreamCalls[0])
-    assert.match(request, /whycode-task-execution-boundary/)
-    assert.doesNotMatch(request, /剩余核心功能已经完成|相关调用路径已经统一|整体结果通过验证/)
-    assert.ok(request.indexOf('whycode-task-execution-boundary') < request.indexOf('我刚刚说了什么'))
+    assert.match(request, /剩余核心功能已经完成/)
     const names = toolNames(model.doStreamCalls[0])
     assertStableTaskPlanTools(names)
   })
 
-  it('咨询旧任务方案时保持计划休眠，不允许模型误写进度', async () => {
+  it('只咨询方案时保留已有计划', async () => {
     const model = modelWithSteps([finalStep('可以先比较两种方案，再由你决定。')])
     const { session } = createSession(model)
     session.restoreTaskStateSnapshot(activeState())
@@ -341,7 +349,7 @@ describe('Main 长任务端到端控制', () => {
     assertStableTaskPlanTools(toolNames(model.doStreamCalls[0]))
   })
 
-  it('休眠计划不按问题类别裁剪普通工具，是否使用由模型按语义决定', async () => {
+  it('已有计划时提供完整普通工具，是否使用由模型按语义决定', async () => {
     const model = modelWithSteps([
       finalStep('《蔚蓝》仍有稳定玩家群体。'),
       finalStep('这是一个游戏项目。'),
@@ -382,9 +390,8 @@ describe('Main 长任务端到端控制', () => {
     assert.deepEqual(second.prompt.slice(0, first.prompt.length), first.prompt)
   })
 
-  it('独立新目标按结束、扫描、创建切换，状态不保存历史计划', async () => {
+  it('创建新目标只提交新计划，状态和工具返回不包含旧目标', async () => {
     const model = modelWithSteps([
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {}),
       toolStep('ListDir', { path: '.', limit: 20 }),
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '完整开发 CSGO 网页游戏',
@@ -405,25 +412,16 @@ describe('Main 长任务端到端控制', () => {
 
     assert.equal(result, 'completed')
     const updates = events.filter((event) => event.type === 'task-plan-updated')
-    assert.deepEqual(updates.map((event) => event.plan.status), [
-      'ended',
-      'active',
-      'ended',
-    ])
-    const state = session.captureTaskStateSnapshot()!
-    assert.equal(state.activePlan, null)
-    assert.deepEqual(Object.keys(state).sort(), [
-      'activePlan',
-      'interruptionReason',
-      'resumeRequired',
-      'version',
-    ])
+    assert.deepEqual(updates.map(event => event.plan.status), ['active'])
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.goal, '完整开发 CSGO 网页游戏')
+    const created = events.find(event => event.type === 'tool-end' && typeof event.result === 'string' && event.result.includes('<whycode-task-result'))
+    assert.ok(created?.type === 'tool-end' && !created.isError && typeof created.result === 'string')
+    assert.doesNotMatch(created.result, /旧的复杂任务|覆盖|替换/)
     assert.equal(events.some((event) => event.type === 'task-plan-restored'), false)
   })
 
   it('UpdateTaskItem 在一个稳定步骤内同时修订路线并推进状态', async () => {
     const model = modelWithSteps([
-      toolStep(RESUME_TASK_PLAN_TOOL_NAME, { plan_id: activePlan().id }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         changes: [
           { action: 'edit', item_id: 'T2', outcome: '所有调用路径已经统一' },
@@ -460,7 +458,7 @@ describe('Main 长任务端到端控制', () => {
     assert.deepEqual(session.captureTaskStateSnapshot(), activeState())
   })
 
-  it('目标切换确认跨会话保留，明确回答后结束旧计划并重新创建', async () => {
+  it('重启后回答此前的问题可以直接创建替代计划', async () => {
     const question = '是否放弃当前任务并改做 CSGO？'
     const model = modelWithSteps([
       toolStep('AskUserQuestion', {
@@ -474,7 +472,6 @@ describe('Main 长任务端到端控制', () => {
         }],
       }),
       finalStep('请确认是否切换任务。'),
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {}),
       toolStep('ListDir', { path: '.', limit: 20 }),
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '完整开发新的 CSGO 游戏',
@@ -494,7 +491,7 @@ describe('Main 长任务端到端控制', () => {
       'waiting-user',
     )
     const [pendingQuestion] = pendingUserQuestions(first.captureMessageSnapshot())
-    assert.equal(pendingQuestion?.planId, null)
+    assert.equal(pendingQuestion?.item.question, question)
 
     const reopened = createSession(model, 'E:\\Test').session
     reopened.restoreMessageSnapshot(first.captureMessageSnapshot())
@@ -505,44 +502,11 @@ describe('Main 长任务端到端控制', () => {
     const answerTools = toolNames(model.doStreamCalls[2])
     assertStableTaskPlanTools(answerTools)
     assertOrdinaryProjectTools(answerTools)
-    assert.equal(reopened.captureTaskStateSnapshot()?.activePlan, null)
+    assert.equal(reopened.captureTaskStateSnapshot()?.activePlan?.goal, '完整开发新的 CSGO 游戏')
   })
 
-  it('恢复计划在本轮重新接合后由最终正文自然结束', async () => {
+  it('正式共识执行可以直接更新既有计划', async () => {
     const model = modelWithSteps([
-      toolStep(RESUME_TASK_PLAN_TOOL_NAME, {
-        plan_id: activePlan().id,
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        changes: [{
-          action: 'edit',
-          item_id: 'T1',
-          outcome: '剩余核心功能已经按当前代码完成',
-        }],
-      }),
-      finalStep('过早结束一'),
-    ])
-    const { session, events } = createSession(model)
-    session.restoreTaskStateSnapshot(activeState())
-
-    const result = await session.handleUserMessage('继续刚才的任务')
-
-    assert.equal(result, 'completed')
-    assert.equal(model.doStreamCalls.length, 3)
-    assertStableTaskPlanTools(toolNames(model.doStreamCalls[0]))
-    assertStableTaskPlanTools(toolNames(model.doStreamCalls[1]))
-    assert.match(JSON.stringify(model.doStreamCalls[1]), /剩余核心功能已经完成|整体结果通过验证/)
-    assert.equal(events.some((event) => event.type === 'error'), false)
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
-    const terminal = events.findLast((event) => event.type === 'task-plan-updated')
-    assert.equal(terminal?.type === 'task-plan-updated' && terminal.plan.status, 'ended')
-  })
-
-  it('正式共识执行由模型根据用户语义恢复既有计划', async () => {
-    const model = modelWithSteps([
-      toolStep(RESUME_TASK_PLAN_TOOL_NAME, {
-        plan_id: activePlan().id,
-      }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T1',
         status: 'completed',
@@ -570,7 +534,7 @@ describe('Main 长任务端到端控制', () => {
     assertStableTaskPlanTools(toolNames(model.doStreamCalls[1]))
   })
 
-  it('内部执行包不会仅凭内部文案唤醒与新请求无关的旧计划', async () => {
+  it('内部执行包只回答用户问题时保留未完成计划', async () => {
     const model = modelWithSteps([finalStep('TTL 是 Time to Live。')])
     const { session } = createSession(model)
     session.restoreTaskStateSnapshot(activeState())
@@ -581,7 +545,7 @@ describe('Main 长任务端到端控制', () => {
 
     assert.equal(result, 'completed')
     assertStableTaskPlanTools(toolNames(model.doStreamCalls[0]))
-    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[0]), /剩余核心功能已经完成|整体结果通过验证/)
+    assert.deepEqual(session.captureTaskStateSnapshot(), activeState())
   })
 })
 
@@ -621,8 +585,6 @@ function activeState(): TaskPlanState {
   return {
     version: activePlan().revision,
     activePlan: activePlan(),
-    resumeRequired: false,
-    interruptionReason: null,
   }
 }
 
@@ -649,11 +611,11 @@ function countClosedTaskStateReminders(messages: ModelMessage[]): number {
 }
 
 function assertStableTaskPlanTools(names: string[]): void {
+  assert.equal(names.includes('ResumeTaskPlan'), false)
   assert.equal(names.includes('ReplaceTaskPlan'), false)
   assert.equal(names.includes('AddTaskItem'), false)
   for (const name of [
     CREATE_TASK_PLAN_TOOL_NAME,
-    RESUME_TASK_PLAN_TOOL_NAME,
     UPDATE_TASK_ITEM_TOOL_NAME,
     CLOSE_TASK_PLAN_TOOL_NAME,
   ]) {

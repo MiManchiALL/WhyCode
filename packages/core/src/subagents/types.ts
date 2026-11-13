@@ -73,7 +73,6 @@ export const subagentActivationSchema = z.object({
   parentTurnId: z.string().min(1),
   parentToolCallId: z.string().min(1),
   promptPreview: z.string().min(1).max(MAX_SUBAGENT_PROMPT_PREVIEW_CHARS),
-  engagedPlanId: idSchema.optional(),
   startedAt: timestampSchema,
   endedAt: timestampSchema.optional(),
   outcome: subagentOutcomeSchema.optional(),
@@ -188,7 +187,6 @@ export interface SubagentLaunchRequest {
   prompt: string
   parentTurnId: string
   parentToolCallId: string
-  engagedPlanId?: string
 }
 
 export interface SubagentContinueRequest {
@@ -196,7 +194,6 @@ export interface SubagentContinueRequest {
   prompt: string
   parentTurnId: string
   parentToolCallId: string
-  engagedPlanId?: string
 }
 
 export interface SubagentLaunchResult {
@@ -221,7 +218,6 @@ export interface SubagentSettlementNotification {
   description: string
   outcome: SubagentOutcome
   resultText: string
-  engagedPlanId?: string
 }
 
 export interface SubagentModelSnapshot {

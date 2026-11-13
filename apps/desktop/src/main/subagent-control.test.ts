@@ -290,11 +290,11 @@ describe('子代理控制与被动恢复', { timeout: 30_000 }, () => {
       && item.event.type === 'text-delta' && item.event.text.endsWith('末尾完整证据')))
   })
 
-  it('交付重启前的结果不会解除同一计划中新子代理的等待', async () => {
+  it('交付重启前的结果只确认对应激活，不解除新回合的子代理等待', async () => {
     const fixture = await createFixture(['旧结果', '新结果'])
     const parentId = fixture.parentJournal.sessionId
-    const planId = randomUUID()
-    const ctx = { ...fixture.toolContext('parent', 'spawn'), engagedPlanId: planId }
+    const ctx = fixture.toolContext('parent', 'spawn')
+    const nextTurn = randomUUID()
     const input = { action: 'spawn', name: 'explore', description: '核查计划', prompt: '核查' }
     const [tool] = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     await tool!.execute(input, ctx)
@@ -303,15 +303,16 @@ describe('子代理控制与被动恢复', { timeout: 30_000 }, () => {
     const recovered = new SubagentService(fixture.serviceOptions)
     try {
       await recovered.initialize()
-      assert.equal(recovered.hasPendingPlanContinuation(parentId, planId), false)
+      const current = async () => (await recovered.turnState(parentId, nextTurn)).activations.map(item => item.settlement)
+      assert.deepEqual(await current(), [])
       const [resumedTool] = recovered.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
-      await resumedTool!.execute(input, ctx)
+      await resumedTool!.execute(input, { ...ctx, turnId: nextTurn })
       await fixture.waitForSettlements(2)
-      assert.equal(recovered.hasPendingPlanContinuation(parentId, planId), true)
+      assert.deepEqual(await current(), ['pending'])
       await recovered.markSettlementDelivered(fixture.settlements[0]!, 'receiving-turn')
-      assert.equal(recovered.hasPendingPlanContinuation(parentId, planId), true)
+      assert.deepEqual(await current(), ['pending'])
       await recovered.markSettlementDelivered(fixture.settlements[1]!, 'receiving-turn')
-      assert.equal(recovered.hasPendingPlanContinuation(parentId, planId), false)
+      assert.deepEqual(await current(), ['delivered'])
     } finally { await recovered.close() }
   })
 })

@@ -125,7 +125,6 @@ describe('SessionStore Fork', () => {
     await source.recordTurnStart(
       'turn-after-draft',
       [message('user', '完成一次新对话')],
-      undefined,
       [],
       rootInputId,
     )
@@ -167,7 +166,6 @@ describe('SessionStore Fork', () => {
     await source.recordTurnStart(
       'turn-consuming-draft',
       [message('user', '重新提交后的问题')],
-      undefined,
       [],
       rootInputId,
     )
@@ -199,7 +197,7 @@ describe('SessionStore Fork', () => {
     await source.recordStep('first', [message('assistant', '首个回答')])
     await source.recordTurnEnd('first', 'completed')
     await recordForkBoundary(source, 'first')
-    await source.recordTurnStart('next', [message('user', '新的排队消息')], undefined, [nextId])
+    await source.recordTurnStart('next', [message('user', '新的排队消息')], [nextId])
     await source.recordStep('next', [message('assistant', '第二个回答')])
     await source.recordTurnEnd('next', 'completed')
     const fork = await store.fork(source, 'first')

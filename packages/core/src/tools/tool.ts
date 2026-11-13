@@ -29,7 +29,7 @@ export interface ToolDefinition<
   kind: 'read' | 'edit' | 'execute' | 'control'
   /** 多操作工具在参数校验后确定本次调用的权限与并发行为；未提供时使用静态声明。 */
   behavior?: (input: InferSchema<InputSchema>) => ToolBehavior
-  /** 该工具建立计划身份或执行权边界，必须独占一次模型 step。 */
+  /** 该工具必须独占一次模型步骤。 */
   requiresStandaloneStep: boolean
   /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
   endsTurnOnSuccess: boolean
@@ -68,8 +68,6 @@ export interface ToolContext {
   /** 本会话固定 scratch 与额外授权目录（与权限上下文同步） */
   additionalDirs: readonly string[]
   abortSignal: AbortSignal
-  /** 当前工具步骤确实接合的计划；后台任务终态只可据此恢复同一计划。 */
-  engagedPlanId?: string
   /** 当前父回合与工具调用的稳定身份；异步宿主任务用它建立可追溯所有权。 */
   turnId?: string
   toolCallId?: string

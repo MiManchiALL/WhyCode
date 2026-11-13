@@ -84,7 +84,7 @@ describe('工具历史的统一顺序投影', () => {
     const { store, journal } = await setup(t)
     await journal.recordTurnStart('turn', [{ role: 'user', content: '并行读取' }])
     await journal.recordStep('turn', [calls()])
-    await journal.recordStep('turn', [], undefined, undefined, { startedToolCallId: 'call-1' })
+    await journal.recordStep('turn', [], undefined, { startedToolCallId: 'call-1' })
     await journal.recordStep('turn', [result(2)])
     const cold = await store.open(journal.sessionId)
     assert.deepEqual(resultIds(cold.initialMessages), ['call-1', 'call-2'])
@@ -106,7 +106,7 @@ describe('工具历史的统一顺序投影', () => {
     await journal.recordTurnStart('turn', [{ role: 'user', content: '获取两份资料' }])
     await journal.recordStep('turn', [calls()])
     await journal.recordStep('turn', [{ role: 'tool', content: [...result(2).content, ...result(1).content] }],
-      undefined, undefined, { pdfAttachments: [pdf] })
+      undefined, { pdfAttachments: [pdf] })
     const cold = buildLoadedSession(parseTranscript(await readFile(transcript, 'utf8')))
     assert.deepEqual(resultIds(cold.messages), ['call-1', 'call-2'])
     assert.deepEqual([...referencedPdfAttachmentIds(cold.messages)], [id])

@@ -14,14 +14,14 @@ export const askUserQuestionSchema = z.strictObject({
 })
 export const userQuestionSchema = askUserQuestionSchema.extend({
   id: z.string().min(1),
+  // 旧问题记录可带有来源计划，读入后仅保留题目本身。
   planId: z.string().optional(),
-})
+}).transform(({ id, questions }) => ({ id, questions }))
 export type UserQuestion = z.infer<typeof userQuestionSchema>
-export const pendingQuestionSchema = z.strictObject({
+export const pendingQuestionSchema = z.object({
   id: z.string().min(1),
   toolUseId: z.string().min(1),
   item: userQuestionItemSchema,
-  planId: z.string().nullable(),
 })
 export const questionResolutionSchema = z.strictObject({
   id: z.string().min(1),
@@ -43,7 +43,7 @@ export type PendingQuestion = z.infer<typeof pendingQuestionSchema>
 export type QuestionResolution = z.infer<typeof questionResolutionSchema>
 
 export function questionsForBatch(batch: UserQuestion): PendingQuestion[] {
-  return batch.questions.map((item, index) => ({ id: JSON.stringify([batch.id, index]), toolUseId: batch.id, item, planId: batch.planId ?? null }))
+  return batch.questions.map((item, index) => ({ id: JSON.stringify([batch.id, index]), toolUseId: batch.id, item }))
 }
 
 export function formatQuestionAnswer(question: PendingQuestion, answer: string): string {

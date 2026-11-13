@@ -50,7 +50,7 @@ interface LiveCommandTask extends PersistedCommandTask {
   finishPromise?: Promise<void>
   stopPromise?: Promise<void>
   readers: Set<OutputReader>
-  terminalNotification?: { engagedPlanId?: string }
+  terminalNotification?: { turnId?: string }
   terminalNotificationSent?: boolean
 }
 
@@ -269,11 +269,11 @@ export class CommandSessionManager {
   async armTerminalNotification(
     sessionId: string,
     taskId: string,
-    engagedPlanId?: string,
+    turnId?: string,
   ): Promise<CommandTaskNotificationHandoff> {
     const task = await this.getOwnedTask(sessionId, taskId)
     if (task.status !== 'running') return { task: this.snapshot(task), armed: false }
-    task.terminalNotification = engagedPlanId ? { engagedPlanId } : {}
+    task.terminalNotification = { turnId }
     const snapshot = this.snapshot(task)
     try {
       await this.persist(task)
@@ -285,12 +285,12 @@ export class CommandSessionManager {
     return { task: snapshot, armed: true }
   }
 
-  hasPendingPlanContinuation(sessionId: string, planId: string): boolean {
+  hasPendingCommandWake(sessionId: string, turnId: string): boolean {
     return [...this.tasks.values()].some((task) =>
       task.sessionId === sessionId
       && (isCommandTaskActive(task.status) || task.status === 'completed' || task.status === 'failed'
         || (task.status === 'stopped' && task.stopReason?.source === 'user'))
-      && task.terminalNotification?.engagedPlanId === planId
+      && task.terminalNotification?.turnId === turnId
       && task.terminalNotificationSent !== true,
     )
   }
@@ -487,9 +487,6 @@ export class CommandSessionManager {
     task.terminalNotificationSent = true
     this.onBackgroundTaskTerminal({
       task: this.snapshot(task),
-      ...(task.terminalNotification?.engagedPlanId
-        ? { engagedPlanId: task.terminalNotification.engagedPlanId }
-        : {}),
     })
   }
 

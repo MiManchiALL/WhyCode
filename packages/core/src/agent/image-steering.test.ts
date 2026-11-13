@@ -140,7 +140,7 @@ describe('忙时图片 steering', () => {
       await journal.recordUserInputWithId(inputId, '必须先落盘的补图', false, attachments)
       const recordStart = journal.recordTurnStart.bind(journal)
       journal.recordTurnStart = async (...args: Parameters<typeof recordStart>) => {
-        if (args[3]?.includes(inputId)) throw new Error('simulated fsync failure')
+        if (args[2]?.includes(inputId)) throw new Error('simulated fsync failure')
         await recordStart(...args)
       }
       session.handleUserMessage('必须先落盘的补图', false, attachments, inputId)

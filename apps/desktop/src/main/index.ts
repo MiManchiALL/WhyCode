@@ -948,9 +948,7 @@ async function createMainAgentSession(
       browser: browserAgent.forRuntime(runtime.runtimeId),
       pdfProcessor,
       auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
-      hasPendingTaskPlanContinuation: (planId) =>
-        commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId)
-        || subagents.hasPendingPlanContinuation(recorder.sessionId, planId),
+      hasPendingCommandWake: turnId => commandSessions.hasPendingCommandWake(recorder.sessionId, turnId),
       getSubagentTurnState: (turnId) => subagents.turnState(recorder.sessionId, turnId),
       pendingSubagentSettlements: () => subagents.pendingSettlements(recorder),
       onSubagentSettlementDelivered: (notification, turnId) => subagents.markSettlementDelivered(notification, turnId),
@@ -2711,7 +2709,7 @@ async function deleteSession(sessionId: string, options: DeleteSessionOptions): 
         if (remoteCleanup === 'required') await sshWorkspaces.removeScratch(sessionId, targetWorkspace)
       },
       onBeforeArtifactsDelete: async () => {
-        await subagents.forgetParent(sessionId)
+        await subagents.beginParentAbort(sessionId).done
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
       },
       onBeforeFactSourceDelete: async () => {

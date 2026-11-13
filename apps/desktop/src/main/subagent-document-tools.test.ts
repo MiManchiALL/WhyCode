@@ -55,7 +55,7 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
         assert.ok(names.includes('CreateTaskPlan'))
         const definition = fixture.toolContext('turn', 'call').subagentDefinitions.find(item => item.name === role)!
         const allowed = new Set([
-          ...definition.toolNames, 'CreateTaskPlan', 'ResumeTaskPlan', 'UpdateTaskItem', 'CloseTaskPlan',
+          ...definition.toolNames, 'CreateTaskPlan', 'UpdateTaskItem', 'CloseTaskPlan',
         ])
         assert.ok(names.every(name => allowed.has(name)), '实际工具只能收窄目录声明的范围')
         const system = JSON.stringify(fixture.modelCalls[0]!.prompt[0])

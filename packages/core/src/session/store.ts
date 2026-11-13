@@ -15,11 +15,9 @@ import type { CoreEvent, StopReason } from '../events.ts'
 import {
   cloneTaskPlanState,
   emptyTaskPlanState,
-  interruptTaskPlanState,
   type TaskPlanState,
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
-import { createTaskContextMessage } from '../tasks/context.ts'
 import type { QuestionReply } from '../user-questions.ts'
 import { availableQuestions, hasPendingUserQuestion, pendingUserQuestions, applyQuestionSkips, carryPendingQuestions } from '../context/question-state.ts'
 import { latestVisibleRootTurn, compactViewEvent, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
@@ -161,7 +159,6 @@ export class SessionStore {
       new Map(),
       new Map(),
       null,
-      null,
       [],
       [],
       null,
@@ -244,7 +241,6 @@ export class SessionStore {
       loaded.turnStartConsensusStates,
       loaded.turnStartSkills,
       loaded.interruptedTurnId,
-      loaded.interruptedTurnEngagedPlanId,
       loaded.undeliveredUserInputIds,
       loaded.pendingUserInputs,
       loaded.interruptedConsensusTaskId,
@@ -471,7 +467,6 @@ export class SessionJournal implements SessionRecorder {
   private turnStartConsensusStates: Map<string, ConsensusPersistedState | null>
   private turnStartSkills: Map<string, ActivatedSkill[]>
   private activeTurnId: string | null
-  private activeTurnEngagedPlanId: string | null
   private undeliveredUserInputIdSet: Set<string>
   private pendingUserInputMap: Map<string, PendingUserInput>
   private activeConsensusTaskId: string | null
@@ -503,7 +498,6 @@ export class SessionJournal implements SessionRecorder {
     turnStartConsensusStates: Map<string, ConsensusPersistedState | null>,
     turnStartSkills: Map<string, ActivatedSkill[]>,
     interruptedTurnId: string | null,
-    interruptedTurnEngagedPlanId: string | null,
     undeliveredUserInputIds: string[],
     pendingUserInputs: PendingUserInput[],
     interruptedConsensusTaskId: string | null,
@@ -552,7 +546,6 @@ export class SessionJournal implements SessionRecorder {
       [...turnStartSkills].map(([turnId, skills]) => [turnId, structuredClone(skills)]),
     )
     this.activeTurnId = interruptedTurnId
-    this.activeTurnEngagedPlanId = interruptedTurnEngagedPlanId
     this.undeliveredUserInputIdSet = new Set(undeliveredUserInputIds)
     this.pendingUserInputMap = new Map(
       pendingUserInputs.map((input) => [input.id, structuredClone(input)]),
@@ -1052,7 +1045,6 @@ export class SessionJournal implements SessionRecorder {
   recordTurnStart(
     turnId: string,
     messages: ModelMessage[],
-    engagedPlanId?: string,
     deliveredInputIds: readonly string[] = [],
     rootInputId?: string,
     skills: readonly ActivatedSkill[] = [],
@@ -1069,7 +1061,6 @@ export class SessionJournal implements SessionRecorder {
       const started = this.entry({
         type: 'turn-start',
         turnId,
-        engagedPlanId: engagedPlanId ?? null,
         ...(rootInputId ? { rootInputId } : {}),
       })
       const batch = this.entry(
@@ -1077,7 +1068,6 @@ export class SessionJournal implements SessionRecorder {
           type: 'messages',
           turnId,
           messages: dehydrateImageMessages(recordedMessages),
-          engagedPlanId: engagedPlanId ?? null,
           ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
         },
         started.uuid,
@@ -1096,7 +1086,6 @@ export class SessionJournal implements SessionRecorder {
       this.deletePendingInputs(deliveredInputIds)
       appendOrderedMessages(this.messages, recordedMessages)
       this.activeTurnId = turnId
-      this.activeTurnEngagedPlanId = engagedPlanId ?? null
       this.metadata.updatedAt = started.timestamp
       this.metadata.status = 'running'
       await this.refreshMetadataCache()
@@ -1124,7 +1113,6 @@ export class SessionJournal implements SessionRecorder {
     turnId: string,
     messages: ModelMessage[],
     taskState?: TaskPlanStepUpdate,
-    engagedPlanId?: string | null,
     resources: {
       attachments?: readonly ImageAttachment[]
       pdfAttachments?: readonly PdfAttachment[]
@@ -1147,7 +1135,6 @@ export class SessionJournal implements SessionRecorder {
         ...(attachments.length ? { attachments } : {}),
         ...(pdfAttachments.length ? { pdfAttachments } : {}),
         ...(taskState !== undefined ? { taskState } : {}),
-        ...(engagedPlanId !== undefined ? { engagedPlanId } : {}),
         ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
         ...(resources.startedToolCallId ? { startedToolCallId: resources.startedToolCallId } : {}),
       })
@@ -1158,7 +1145,6 @@ export class SessionJournal implements SessionRecorder {
       this.addPdfAttachments(pdfAttachments)
       this.deletePendingInputs(deliveredInputIds)
       if (taskState !== undefined) this.taskState = cloneTaskPlanState(taskState)
-      if (engagedPlanId !== undefined) this.activeTurnEngagedPlanId = engagedPlanId
       this.metadata.updatedAt = batch.timestamp
       await this.refreshMetadataCache(recordedMessages.some((message: ConversationMessage) => message.whycode?.questionBatch || message.whycode?.questionReply))
     })
@@ -1171,7 +1157,6 @@ export class SessionJournal implements SessionRecorder {
       this.appendResponseView(ended)
       if (this.activeTurnId === turnId) {
         this.activeTurnId = null
-        this.activeTurnEngagedPlanId = null
       }
       this.metadata.updatedAt = ended.timestamp
       this.metadata.status =
@@ -1218,7 +1203,6 @@ export class SessionJournal implements SessionRecorder {
           reason,
           compaction,
           activeTurnId: activeTurnId ?? null,
-          activeTurnEngagedPlanId: activeTurnId ? this.activeTurnEngagedPlanId : null,
           activeConsensusTaskId: this.activeConsensusTaskId,
           activeConsensusBaseMessages: this.activeConsensusBaseMessages
             ? dehydrateImageMessages(this.activeConsensusBaseMessages)
@@ -1267,9 +1251,6 @@ export class SessionJournal implements SessionRecorder {
       )
       this.retainTurnStartSkills(new Set(runtimeTurnStarts.map((start) => start.turnId)))
       this.activeTurnId = activeTurnId ?? null
-      this.activeTurnEngagedPlanId = snapshot.type === 'snapshot'
-        ? snapshot.activeTurnEngagedPlanId
-        : null
       this.metadata.updatedAt = snapshot.timestamp
       if (reason === 'rollback') {
         this.btwConversationState = null
@@ -1480,18 +1461,6 @@ export class SessionJournal implements SessionRecorder {
       if (hadInterruptedWork) {
         recoveredMessages.push(createTurnAbortedMessage('process-interruption'))
       }
-      const activePlanId = this.taskState.activePlan?.id
-      const interruptedExecutionWasEngaged = Boolean(
-        activePlanId
-        && this.activeTurnEngagedPlanId === activePlanId,
-      )
-      const recoveredTaskState = interruptedExecutionWasEngaged
-        ? interruptTaskPlanState(this.taskState, 'process-interruption')
-        : cloneTaskPlanState(this.taskState)
-      const taskContext = hadInterruptedWork
-        ? createTaskContextMessage(recoveredTaskState)
-        : null
-      if (taskContext) recoveredMessages.push(taskContext)
       const recoverableTurnIds = this.activeConsensusTaskId
         ? this.activeConsensusBaseTurnIds ?? new Set<string>()
         : undefined
@@ -1501,13 +1470,12 @@ export class SessionJournal implements SessionRecorder {
           type: 'snapshot',
           reason: 'recovery',
           activeTurnId: null,
-          activeTurnEngagedPlanId: null,
           activeConsensusTaskId: null,
           activeConsensusBaseMessages: null,
           activeConsensusBaseTaskState: null,
           activeConsensusBaseTurnIds: null,
           consensusState: this.consensusState,
-          taskState: recoveredTaskState,
+          taskState: this.taskState,
           modelId: this.metadata.modelId,
           reasoningEffort: this.metadata.reasoningEffort,
           messages: dehydrateImageMessages(recoveredMessages),
@@ -1522,9 +1490,7 @@ export class SessionJournal implements SessionRecorder {
       )
       await this.appendEntries([recovered])
       this.messages = [...recoveredMessages]
-      this.taskState = recoveredTaskState
       this.activeTurnId = null
-      this.activeTurnEngagedPlanId = null
       this.undeliveredUserInputIdSet.clear()
       this.activeConsensusTaskId = null
       this.activeConsensusBaseMessages = null
@@ -1620,7 +1586,6 @@ export class SessionJournal implements SessionRecorder {
       type: 'snapshot',
       reason: 'rollback',
       activeTurnId: null,
-      activeTurnEngagedPlanId: null,
       activeConsensusTaskId: null,
       activeConsensusBaseMessages: null,
       activeConsensusBaseTaskState: null,
@@ -1676,7 +1641,6 @@ export class SessionJournal implements SessionRecorder {
     ]))
     this.retainTurnStartSkills(new Set(transaction.turnStarts.map((start) => start.turnId)))
     this.activeTurnId = null
-    this.activeTurnEngagedPlanId = null
     this.activeConsensusTaskId = null
     this.activeConsensusBaseMessages = null
     this.activeConsensusBaseTaskState = null
