@@ -498,7 +498,7 @@ describe('会话界面时间线重建', () => {
     }
   })
 
-  it('CloseTaskPlan 卡片保留调用当时的活动计划 ID', () => {
+  it('提前结束计划的工具卡片保留实际参数和终态回执', () => {
     let state = createConversationState()
     state = applyCoreEvent(state, { type: 'task-plan-updated', plan: taskPlan(1) })
     state = applyCoreEvent(state, {
@@ -507,10 +507,13 @@ describe('会话界面时间线重建', () => {
       toolName: 'CloseTaskPlan',
       input: {},
     })
-    const tool = state.blocks.find((block) => block.kind === 'tool')
-    assert.deepEqual(tool?.kind === 'tool' ? tool.call.input : null, {
-      plan_id: '11111111-1111-4111-8111-111111111111',
+    state = applyCoreEvent(state, {
+      type: 'tool-end', toolUseId: 'close-plan-id', isError: false, result: '计划已按要求结束，已完成 1/3。',
     })
+    const tool = state.blocks.find((block) => block.kind === 'tool')
+    assert.ok(tool?.kind === 'tool')
+    assert.deepEqual(tool.call.input, {})
+    assert.equal(tool.call.result, '计划已按要求结束，已完成 1/3。')
   })
 
   it('显式 Skill 摘要随根消息和插话进入可见时间线', () => {

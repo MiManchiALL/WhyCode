@@ -115,7 +115,6 @@ import {
 import { createTaskPlanTools } from '../tasks/tools.ts'
 import type { TaskPlanState } from '../tasks/types.ts'
 import { taskPlanViewBeforeTurn } from '../session/task-plan-view.ts'
-import { taskStateBlock } from '../tasks/context.ts'
 import {
   hasPendingUserQuestion, pendingUserQuestions, availableQuestions, withQuestionBatch, applyQuestionSkips, carryPendingQuestions,
 } from '../context/question-state.ts'
@@ -2180,8 +2179,7 @@ export class AgentSession {
   }
 
   private compactApplicationContext(): string | undefined {
-    const state = this.taskPlan?.stateSnapshot
-    const taskContext = state && state.version > 0 ? taskStateBlock(state) : undefined
+    const taskContext = this.taskPlan?.compactContext()
     const pdfContext = compactPdfAttachmentContext(this.sessionPdfAttachments(), recentUserPdfIds(this.messages))
     const sections = [taskContext, pdfContext].filter(
       (section): section is string => Boolean(section),
