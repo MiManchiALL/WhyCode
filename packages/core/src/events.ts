@@ -386,7 +386,6 @@ const STEP_SCOPED_CORE_EVENT_TYPES = new Set<CoreEvent['type']>([
   'image-viewed',
   'checkpoint-created',
   'checkpoint-disabled',
-  'task-plan-updated',
 ])
 
 /** 这些事件只有在所属模型步骤提交后才能成为稳定可见事实。 */

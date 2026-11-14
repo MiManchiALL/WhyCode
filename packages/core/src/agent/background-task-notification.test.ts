@@ -190,7 +190,13 @@ describe('后台任务终态续轮', () => {
       doStream: async () => finalStep('计划工作已经全部交付，服务继续运行。'),
     })
     const session = createSession(model, [], () => true)
-    session.restoreTaskStateSnapshot(completedActivePlanState())
+    const state = incompleteActivePlanState()
+    for (const item of state.activePlan!.items) {
+      item.status = 'completed'
+      item.evidence = ['后台构建与验收通过']
+    }
+    session.restoreTaskStateSnapshot(state)
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
 
     assert.equal(await session.handleTaskNotification(notification()), 'completed')
     assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
@@ -216,7 +222,7 @@ function notification(status: 'completed' | 'stopped' = 'completed'): CommandTas
   }
 }
 
-function completedActivePlanState(): TaskPlanState {
+function incompleteActivePlanState(): TaskPlanState {
   return {
     version: 1,
     activePlan: {
@@ -236,34 +242,19 @@ function completedActivePlanState(): TaskPlanState {
           id: 'T2',
           kind: 'work',
           outcome: '构建结果已经由模型检查',
-          status: 'completed',
-          evidence: ['测试夹具预置完成'],
+          status: 'in_progress',
+          evidence: [],
         },
         {
           id: 'T3',
           kind: 'verification',
           outcome: '完整后台任务链通过验证',
-          status: 'completed',
-          evidence: ['整体验证完成'],
+          status: 'pending',
+          evidence: [],
         },
       ],
     },
   }
-}
-
-function incompleteActivePlanState(): TaskPlanState {
-  const state = completedActivePlanState()
-  state.activePlan!.items[1] = {
-    ...state.activePlan!.items[1]!,
-    status: 'in_progress',
-    evidence: [],
-  }
-  state.activePlan!.items[2] = {
-    ...state.activePlan!.items[2]!,
-    status: 'pending',
-    evidence: [],
-  }
-  return state
 }
 
 function createSession(

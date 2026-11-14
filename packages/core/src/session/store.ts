@@ -16,7 +16,7 @@ import {
   cloneTaskPlanState,
   emptyTaskPlanState,
   type TaskPlanState,
-  type TaskPlanStepUpdate,
+  type TerminalTaskPlan,
 } from '../tasks/types.ts'
 import type { QuestionReply } from '../user-questions.ts'
 import { availableQuestions, hasPendingUserQuestion, pendingUserQuestions, applyQuestionSkips, carryPendingQuestions } from '../context/question-state.ts'
@@ -1112,12 +1112,13 @@ export class SessionJournal implements SessionRecorder {
   recordStep(
     turnId: string,
     messages: ModelMessage[],
-    taskState?: TaskPlanStepUpdate,
+    taskState?: TaskPlanState,
     resources: {
       attachments?: readonly ImageAttachment[]
       pdfAttachments?: readonly PdfAttachment[]
       deliveredInputIds?: readonly string[]
       startedToolCallId?: string
+      terminalPlan?: TerminalTaskPlan
     } = {},
   ): Promise<void> {
     const recordedMessages = structuredClone(messages)
@@ -1135,6 +1136,7 @@ export class SessionJournal implements SessionRecorder {
         ...(attachments.length ? { attachments } : {}),
         ...(pdfAttachments.length ? { pdfAttachments } : {}),
         ...(taskState !== undefined ? { taskState } : {}),
+        ...(resources.terminalPlan ? { terminalPlan: resources.terminalPlan } : {}),
         ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
         ...(resources.startedToolCallId ? { startedToolCallId: resources.startedToolCallId } : {}),
       })

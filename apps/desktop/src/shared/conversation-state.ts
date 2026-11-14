@@ -94,7 +94,6 @@ export type Block =
 interface PendingStepSnapshot {
   blocks: Block[]
   nextId: number
-  taskPlan: TaskPlan | null
   fileRollbackBoundaryTurnId: string | null
 }
 
@@ -444,7 +443,6 @@ function snapshotConversation(state: ConversationState): PendingStepSnapshot {
   return {
     blocks: state.blocks,
     nextId: state.nextId,
-    taskPlan: state.taskPlan,
     fileRollbackBoundaryTurnId: state.fileRollbackBoundaryTurnId,
   }
 }

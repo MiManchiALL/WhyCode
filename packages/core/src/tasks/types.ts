@@ -32,10 +32,6 @@ const taskItemsSchema = z.array(taskItemSchema).min(2).max(7).superRefine((items
   if (verificationIndexes.length !== 1 || verificationIndexes[0] !== items.length - 1) {
     ctx.addIssue({ code: 'custom', message: '计划最后一项必须是唯一的 verification' })
   }
-  const running = items.filter((item) => item.status === 'in_progress').length
-  if (running > 1) {
-    ctx.addIssue({ code: 'custom', message: '计划至多只能有一个进行中项' })
-  }
 })
 
 const taskPlanBaseSchema = z.object({
@@ -61,8 +57,13 @@ export const endedTaskPlanSchema = taskPlanBaseSchema.extend({
   status: z.literal('ended'),
 })
 
+export type CompletedTaskPlan = z.infer<typeof completedTaskPlanSchema>
+
+export const terminalTaskPlanSchema = z.discriminatedUnion('status', [completedTaskPlanSchema, endedTaskPlanSchema])
+export type TerminalTaskPlan = z.infer<typeof terminalTaskPlanSchema>
+
 export const taskPlanSchema = z.discriminatedUnion('status', [
-  activeTaskPlanSchema,
+  activeTaskPlanSchema.transform(resolveTaskPlanProgress),
   completedTaskPlanSchema,
   endedTaskPlanSchema,
 ])
@@ -72,17 +73,16 @@ export type TaskItem = z.infer<typeof taskItemSchema>
 export type ActiveTaskPlan = z.infer<typeof activeTaskPlanSchema>
 export type TaskPlan = z.infer<typeof taskPlanSchema>
 
+export function resolveTaskPlanProgress(plan: ActiveTaskPlan): ActiveTaskPlan | CompletedTaskPlan {
+  return plan.items.every(item => item.status === 'completed') ? { ...plan, status: 'completed' } : plan
+}
+
 export const taskPlanStateSchema = z.object({
   version: z.number().int().nonnegative(),
   activePlan: activeTaskPlanSchema.nullable(),
 })
 
 export type TaskPlanState = z.infer<typeof taskPlanStateSchema>
-export type TaskPlanStepUpdate = TaskPlanState | undefined
-
-export function cloneActiveTaskPlan(plan: ActiveTaskPlan | null): ActiveTaskPlan | null {
-  return plan ? activeTaskPlanSchema.parse(plan) : null
-}
 
 export function emptyTaskPlanState(): TaskPlanState {
   return {
@@ -92,5 +92,7 @@ export function emptyTaskPlanState(): TaskPlanState {
 }
 
 export function cloneTaskPlanState(state: TaskPlanState): TaskPlanState {
-  return taskPlanStateSchema.parse(state)
+  const copy = taskPlanStateSchema.parse(state)
+  if (copy.activePlan && resolveTaskPlanProgress(copy.activePlan).status === 'completed') copy.activePlan = null
+  return copy
 }

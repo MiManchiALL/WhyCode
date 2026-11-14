@@ -11,8 +11,9 @@ import type { CoreEvent, StopReason } from '../events.ts'
 import type { TurnAbortReason } from './interruption.ts'
 import {
   taskPlanStateSchema,
+  terminalTaskPlanSchema,
+  type TerminalTaskPlan,
   type TaskPlanState,
-  type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
 import { contextCompactedSchema, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
 import {
@@ -337,11 +338,16 @@ const messagesEntrySchema = chainedEntrySchema.extend({
   pdfAttachments: pdfAttachmentsSchema.optional(),
   /** 与本批消息同一崩溃原子提交的权威任务状态；省略表示未变化。 */
   taskState: taskPlanStateSchema.optional(),
+  /** 已关闭计划的最后一次展示随工具结果写入。 */
+  terminalPlan: terminalTaskPlanSchema.optional(),
   /** 与本批模型消息同一原子记录确认送达的忙时输入。 */
   deliveredInputIds: z.array(entryIdSchema).min(1).optional(),
   /** 执行入口已写稳；重启时据此区分未执行与结果未知。 */
   startedToolCallId: z.string().min(1).optional(),
 }).superRefine((entry, ctx) => {
+  if (entry.terminalPlan && entry.taskState?.activePlan !== null) {
+    ctx.addIssue({ code: 'custom', path: ['terminalPlan'], message: '计划终态必须与清空的活动状态一起提交' })
+  }
   entry.attachments?.forEach((attachment, index) => {
     if (attachment.sessionId !== entry.sessionId) {
       ctx.addIssue({
@@ -667,12 +673,13 @@ export interface SessionRecorder {
   recordStep(
     turnId: string,
     messages: ModelMessage[],
-    taskState?: TaskPlanStepUpdate,
+    taskState?: TaskPlanState,
     resources?: {
       attachments?: readonly ImageAttachment[]
       pdfAttachments?: readonly PdfAttachment[]
       deliveredInputIds?: readonly string[]
       startedToolCallId?: string
+      terminalPlan?: TerminalTaskPlan
     },
   ): Promise<void>
   recordTurnEnd(turnId: string, stopReason: StopReason): Promise<void>

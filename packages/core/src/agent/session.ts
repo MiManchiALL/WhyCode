@@ -115,7 +115,7 @@ import {
 import { createTaskPlanTools } from '../tasks/tools.ts'
 import type { TaskPlanState } from '../tasks/types.ts'
 import { taskPlanViewBeforeTurn } from '../session/task-plan-view.ts'
-import { createTaskStateMessage, taskStateBlock } from '../tasks/context.ts'
+import { taskStateBlock } from '../tasks/context.ts'
 import {
   hasPendingUserQuestion, pendingUserQuestions, availableQuestions, withQuestionBatch, applyQuestionSkips, carryPendingQuestions,
 } from '../context/question-state.ts'
@@ -2457,17 +2457,13 @@ export class AgentSession {
     let endedByTool = false
     const asked = new Map<string, UserQuestionItem[]>()
     const stepAttachments = new ToolStepAttachments(this.options.sessionRecorder, this.imageAttachments, this.pdfAttachments)
-    let stepCommitted = false
-    let durableTaskState = this.taskPlan?.stateSnapshot
     let toolExecution: ToolExecutionBatch | null = null
-    let taskPlanFinalized = false
     let mcpStep: McpStepBinding | null = null
     const textBlocks: string[] = []
     const textGate = new AssistantTextGate((event) => {
       textBlocks[event.textBlock] = (textBlocks[event.textBlock] ?? '') + event.text
       if (!this.protocolRound) emit(event)
     })
-    this.taskPlan?.beginStep()
     try {
       await this.refreshSubagentCatalog()
       stepAbort.signal.throwIfAborted()
@@ -2615,8 +2611,8 @@ export class AgentSession {
           ),
           recordResult: async (message, event) => {
             const { messages, attachments, pdfAttachments } = stepAttachments.forTool(event.toolUseId, message)
-            const taskState = this.taskPlan?.stateSnapshot
-            const changedTaskState = taskState?.version !== durableTaskState?.version ? taskState : undefined
+            if (event.isError) this.taskPlan?.discardUpdate()
+            const planUpdate = this.taskPlan?.pendingUpdate
             const items = asked.get(event.toolUseId)
             const question = items && !event.isError ? { id: event.toolUseId, questions: items } : undefined
             if (question) messages[0] = withQuestionBatch(messages[0]!, question)
@@ -2624,53 +2620,38 @@ export class AgentSession {
             this.assertPdfAttachmentsCompatible(pdfAttachments)
             await this.persistRequired(
               (recorder) => recorder.recordStep(
-                this.activeTurn!.id, messages, changedTaskState,
-                { attachments, pdfAttachments },
+                this.activeTurn!.id, messages, planUpdate?.state,
+                { attachments, pdfAttachments, terminalPlan: planUpdate?.plan.status === 'active' ? undefined : planUpdate?.plan },
               ),
               '保存工具结果',
             )
+            if (planUpdate) this.taskPlan?.commitUpdate()
             appendOrderedMessages(this.messages, messages)
             this.addImageAttachments(attachments)
             this.addPdfAttachments(pdfAttachments)
             this.activatePdfAttachments(pdfAttachments)
             if (question) emit({ type: 'user-question', question })
-            durableTaskState = taskState
+            if (planUpdate) {
+              emit({ type: 'task-plan-updated', plan: planUpdate.plan })
+            }
           },
         })
         await toolExecution.run(requestTools)
         if (stepAbort.signal.aborted) endedByTool = false
-      }
-      if (!hadToolCalls && !this.protocolRound && !this.options.promptContext.discussion) {
-        this.taskPlan?.finishIfComplete()
-      }
-      const taskPlanCommit = this.taskPlan?.commitStep()
-      taskPlanFinalized = Boolean(this.taskPlan)
-      const internalMarkers: ModelMessage[] = []
-      if (!hadToolCalls && taskPlanCommit) internalMarkers.push(createTaskStateMessage(taskPlanCommit.state))
-      if (consumeInterruptionBoundary) {
-        internalMarkers.push(createTurnAbortedConsumedMessage())
       }
       const mcpCommitMessages = mcpStep?.messagesOnCommit() ?? []
       const committedMessages = dehydrateImageMessages([
         ...(!toolExecution ? requestReminders : []),
         ...(!toolExecution ? canonicalResponseMessages : []),
         ...stepAttachments.pdfReferences(),
-        ...internalMarkers,
+        ...(consumeInterruptionBoundary ? [createTurnAbortedConsumedMessage()] : []),
         ...mcpCommitMessages,
       ])
       await this.persistRequired(
-        (recorder) => recorder.recordStep(
-          this.activeTurn!.id,
-          committedMessages,
-          taskPlanCommit?.state,
-        ),
+        (recorder) => recorder.recordStep(this.activeTurn!.id, committedMessages),
         '提交模型步骤',
       )
-      stepCommitted = true
       this.messages.push(...committedMessages)
-      if (taskPlanCommit) {
-        emit({ type: 'task-plan-updated', plan: taskPlanCommit.plan })
-      }
       if (stepTotalTokens > 0) {
         const responseCoveredCount = canonicalResponseMessages.findIndex((message) =>
           message.role !== 'assistant')
@@ -2700,11 +2681,7 @@ export class AgentSession {
     } catch (error) {
       mcpStep?.discard()
       await stepAttachments.discardUncommitted()
-      if (!stepCommitted && durableTaskState && (taskPlanFinalized || toolExecution)) {
-        this.taskPlan?.restore(durableTaskState)
-      } else {
-        this.taskPlan?.discardStep()
-      }
+      this.taskPlan?.discardUpdate()
       if (toolExecution) emit({ type: 'step-committed' })
       else {
         textGate.finish()

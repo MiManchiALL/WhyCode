@@ -1,30 +1,16 @@
 import type { ModelMessage } from 'ai'
+import type { TaskPlanDraftItem, TaskPlanItemChange } from './tools.ts'
 import { taskProgressReminder } from './reminder.ts'
 import {
   activeTaskPlanSchema,
-  cloneActiveTaskPlan,
   cloneTaskPlanState,
   emptyTaskPlanState,
-  taskPlanSchema,
+  resolveTaskPlanProgress,
   type ActiveTaskPlan,
   type TaskItem,
   type TaskPlan,
   type TaskPlanState,
 } from './types.ts'
-
-export interface TaskPlanDraftItem {
-  kind: 'work' | 'verification'
-  outcome: string
-}
-
-export type TaskPlanItemChange =
-  | { action: 'add'; outcome: string; afterItemId?: string }
-  | { action: 'edit'; itemId: string; outcome?: string; afterItemId?: string }
-  | { action: 'delete'; itemId: string }
-
-export type TaskPlanTransition =
-  | { itemId: string; status: 'in_progress' }
-  | { itemId: string; status: 'completed'; evidence: string[] }
 
 export type TaskMutationError =
   | 'step_conflict'
@@ -56,9 +42,7 @@ export interface TaskPlanCommit {
  */
 export class TaskPlanController {
   private state: TaskPlanState
-  private stepSnapshot: TaskPlanState | null = null
-  private stepBoundary: 'create' | 'close' | null = null
-  private pendingDisplayPlan: TaskPlan | null = null
+  private pending: TaskPlanCommit | undefined
 
   constructor(initialState: TaskPlanState = emptyTaskPlanState()) {
     this.state = cloneTaskPlanState(initialState)
@@ -72,84 +56,49 @@ export class TaskPlanController {
     return taskProgressReminder(messages, this.state.activePlan)
   }
 
-  get snapshot(): ActiveTaskPlan | null {
-    return cloneActiveTaskPlan(this.state.activePlan)
-  }
-
   get stateSnapshot(): TaskPlanState {
-    return cloneTaskPlanState(this.state)
+    return structuredClone(this.state)
   }
 
-  beginStep(): void {
-    this.stepSnapshot = cloneTaskPlanState(this.state)
-    this.stepBoundary = null
-    this.pendingDisplayPlan = null
+  get pendingUpdate(): TaskPlanCommit | undefined {
+    return this.pending && structuredClone(this.pending)
   }
 
-  commitStep(): TaskPlanCommit | undefined {
-    const update = this.pendingDisplayPlan
-      ? {
-          state: cloneTaskPlanState(this.state),
-          plan: taskPlanSchema.parse(this.pendingDisplayPlan),
-        }
-      : undefined
-    this.resetStep()
-    return update
+  commitUpdate(): void {
+    if (this.pending) this.state = this.pending.state
+    this.pending = undefined
   }
 
-  discardStep(): void {
-    if (this.pendingDisplayPlan && this.stepSnapshot) this.state = cloneTaskPlanState(this.stepSnapshot)
-    this.resetStep()
+  discardUpdate(): void {
+    this.pending = undefined
   }
 
   restore(state: TaskPlanState): void {
     this.state = cloneTaskPlanState(state)
-    this.resetStep()
+    this.pending = undefined
   }
 
   create(goal: string, drafts: TaskPlanDraftItem[]): TaskMutationResult {
-    if (this.pendingDisplayPlan) {
-      return mutationFailure('step_conflict', 'CreateTaskPlan 必须作为本步骤唯一的计划变更。')
-    }
     const next = this.buildPlan(goal, drafts)
     if ('error' in next) return mutationFailure('invalid_plan', next.error)
-    this.state.activePlan = next.plan
-    this.stepBoundary = 'create'
-    this.publish(next.plan)
-    return {
-      ok: true,
-      message: this.progressMessage(next.plan, `已建立 ${next.plan.items.length} 项宏观计划`),
-    }
+    return this.stage(next.plan, this.progressMessage(next.plan, `已建立 ${next.plan.items.length} 项宏观计划`))
   }
 
-  update(
-    changes: TaskPlanItemChange[],
-    transition?: TaskPlanTransition,
-  ): TaskMutationResult {
-    if (this.stepBoundary) {
-      return mutationFailure('step_conflict', '计划边界刚刚变化；请在下一模型步骤再更新任务项。')
-    }
+  update(changes: readonly TaskPlanItemChange[]): TaskMutationResult {
     const current = this.state.activePlan
     if (!current) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
-    if (changes.length === 0 && !transition) {
+    if (changes.length === 0) {
       return mutationFailure('no_state_change', '必须提供任务项变化或状态更新。')
     }
 
-    const plan = activeTaskPlanSchema.parse(current)
+    const plan = structuredClone(current)
     for (const change of changes) {
       const failure = this.applyItemChange(plan, change)
       if (failure) return failure
     }
-    if (transition) {
-      const failure = this.applyTransition(plan, transition)
-      if (failure) return failure
-    }
     if (JSON.stringify(plan.items) === JSON.stringify(current.items)) {
-      if (changes.length === 0 && transition) {
-        return {
-          ok: true,
-          message: this.progressMessage(current, `${transition.itemId} 已处于 ${transition.status}；计划无需更新`),
-        }
+      if (changes.every(change => change.action === 'edit' && change.status && !change.outcome && !change.after_item_id)) {
+        return { ok: true, message: this.progressMessage(current, '计划状态无需更新') }
       }
       return mutationFailure('no_state_change', '计划内容和状态没有实质变化。')
     }
@@ -159,30 +108,14 @@ export class TaskPlanController {
     if (!parsed.success) {
       return mutationFailure('invalid_plan', parsed.error.issues[0]?.message ?? '计划结构无效。')
     }
-    this.state.activePlan = parsed.data
-    this.publish(parsed.data)
-    return {
-      ok: true,
-      message: this.progressMessage(
-        parsed.data,
-        transition?.status === 'completed' ? `${transition.itemId} 已完成` : undefined,
-      ),
-    }
+    const updated = resolveTaskPlanProgress(parsed.data)
+    return this.stage(updated, updated.status === 'completed' ? '全部里程碑已完成，计划已关闭。' : this.progressMessage(updated))
   }
 
   close(): TaskMutationResult {
-    if (this.pendingDisplayPlan) {
-      return mutationFailure('step_conflict', 'CloseTaskPlan 必须作为本步骤唯一的计划变更。')
-    }
     const plan = this.state.activePlan
     if (!plan) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
-    this.finish(plan, 'ended')
-    return { ok: true, message: '任务计划已结束。' }
-  }
-
-  finishIfComplete(): void {
-    const plan = this.state.activePlan
-    if (plan?.items.every(item => item.status === 'completed')) this.finish(plan, 'completed')
+    return this.stage({ ...plan, revision: plan.revision + 1, status: 'ended' }, '任务计划已结束。')
   }
 
   private applyItemChange(
@@ -190,10 +123,15 @@ export class TaskPlanController {
     change: TaskPlanItemChange,
   ): TaskMutationResult | null {
     if (change.action === 'add') return this.addItem(plan, change)
-    const index = plan.items.findIndex((item) => item.id === change.itemId)
-    if (index < 0) return mutationFailure('item_not_found', `任务项不存在：${change.itemId}`)
+    const index = plan.items.findIndex((item) => item.id === change.item_id)
+    if (index < 0) return mutationFailure('item_not_found', `任务项不存在：${change.item_id}`)
     const item = plan.items[index]!
     if (item.status === 'completed') {
+      if (change.action === 'edit' && change.status === 'completed'
+        && change.outcome === undefined && change.after_item_id === undefined
+        && change.evidence && sameStrings(item.evidence, change.evidence)) {
+        return null
+      }
       return mutationFailure('invalid_transition', `${item.id} 已完成，不能再修改或删除。`)
     }
     if (change.action === 'delete') {
@@ -215,14 +153,14 @@ export class TaskPlanController {
     if (plan.items.length >= 7) {
       return mutationFailure('invalid_plan', '计划最多保留 7 个宏观里程碑；请先合并或删除未来项。')
     }
-    const insertionIndex = this.insertionIndex(plan, change.afterItemId)
+    const insertionIndex = this.insertionIndex(plan, change.after_item_id)
     if (typeof insertionIndex !== 'number') return insertionIndex
     const nextNumber = Math.max(...plan.items.map((item) => Number(item.id.slice(1)))) + 1
     plan.items.splice(insertionIndex, 0, {
       id: `T${nextNumber}`,
       kind: 'work',
       outcome,
-      status: 'pending',
+      status: change.status ?? 'pending',
       evidence: [],
     })
     return null
@@ -238,19 +176,26 @@ export class TaskPlanController {
       if (!outcome) return mutationFailure('invalid_plan', '里程碑结果描述不能为空。')
       item.outcome = outcome
     }
-    if (change.afterItemId === undefined) return null
+    if (change.status === 'completed') {
+      if (item.status !== 'in_progress') {
+        return mutationFailure('invalid_transition', `${item.id} 必须先进入 in_progress 才能完成。`)
+      }
+      if (!change.evidence?.length) {
+        return mutationFailure('evidence_required', `完成 ${item.id} 需要可核验的 evidence。`)
+      }
+      item.evidence = change.evidence
+    }
+    if (change.status) item.status = change.status
+    if (change.after_item_id === undefined) return null
     if (item.kind === 'verification') {
       return mutationFailure('invalid_plan', '最终 verification 必须保持在计划末尾。')
     }
-    if (item.status === 'in_progress') {
-      return mutationFailure('invalid_transition', '当前进行中的里程碑不能重排。')
-    }
-    if (change.afterItemId === item.id) {
+    if (change.after_item_id === item.id) {
       return mutationFailure('invalid_plan', '任务项不能排在自身之后。')
     }
     const originalIndex = plan.items.findIndex((entry) => entry.id === item.id)
     plan.items.splice(originalIndex, 1)
-    const insertionIndex = this.insertionIndex(plan, change.afterItemId)
+    const insertionIndex = this.insertionIndex(plan, change.after_item_id)
     if (typeof insertionIndex !== 'number') return insertionIndex
     plan.items.splice(insertionIndex, 0, item)
     return null
@@ -260,8 +205,7 @@ export class TaskPlanController {
     plan: ActiveTaskPlan,
     afterItemId?: string,
   ): number | TaskMutationResult {
-    const verificationIndex = plan.items.findIndex((item) => item.kind === 'verification')
-    if (!afterItemId) return verificationIndex
+    if (!afterItemId) return plan.items.length - 1
     const referenceIndex = plan.items.findIndex((item) => item.id === afterItemId)
     if (referenceIndex < 0) {
       return mutationFailure('item_not_found', `定位任务项不存在：${afterItemId}`)
@@ -272,68 +216,11 @@ export class TaskPlanController {
     return referenceIndex + 1
   }
 
-  private applyTransition(
-    plan: ActiveTaskPlan,
-    transition: TaskPlanTransition,
-  ): TaskMutationResult | null {
-    const item = plan.items.find((entry) => entry.id === transition.itemId)
-    if (!item) return mutationFailure('item_not_found', `任务项不存在：${transition.itemId}`)
-
-    if (transition.status === 'in_progress') {
-      if (item.status === 'completed') {
-        return mutationFailure('invalid_transition', `${item.id} 已完成，不能重新打开。`)
-      }
-      if (item.status === 'in_progress') return null
-      const running = plan.items.find((entry) => entry.status === 'in_progress')
-      if (running) {
-        return mutationFailure('invalid_transition', `请先处理当前里程碑 ${running.id}。`)
-      }
-      item.status = 'in_progress'
-      item.evidence = []
-      return null
-    }
-
-    if (transition.status === 'completed') {
-      const evidence = transition.evidence.map((entry) => entry.trim()).filter(Boolean)
-      if (evidence.length === 0) {
-        return mutationFailure('evidence_required', `完成 ${item.id} 必须提供可核验的 evidence。`)
-      }
-      if (item.status === 'completed') {
-        if (sameStrings(item.evidence, evidence)) return null
-        return mutationFailure('invalid_transition', `${item.id} 已完成，不能改写完成证据。`)
-      }
-      if (item.status !== 'in_progress') {
-        return mutationFailure('invalid_transition', `${item.id} 必须先进入 in_progress 才能完成。`)
-      }
-      item.status = 'completed'
-      item.evidence = evidence
-      const next = plan.items.find((entry) => entry.status === 'pending')
-      if (next) next.status = 'in_progress'
-      return null
-    }
-    return null
-  }
-
-  private finish(plan: ActiveTaskPlan, status: 'completed' | 'ended'): void {
-    const closed = taskPlanSchema.parse({
-      ...plan,
-      status,
-      revision: plan.revision + 1,
-    })
-    this.state.activePlan = null
-    this.stepBoundary = 'close'
-    this.publish(closed)
-  }
-
-  private publish(plan: TaskPlan): void {
-    this.state.version++
-    this.pendingDisplayPlan = taskPlanSchema.parse(plan)
-  }
-
-  private resetStep(): void {
-    this.stepSnapshot = null
-    this.stepBoundary = null
-    this.pendingDisplayPlan = null
+  private stage(plan: TaskPlan, message: string): TaskMutationResult {
+    if (this.pending) return mutationFailure('step_conflict', '上一项计划变更尚未提交。')
+    const activePlan = plan.status === 'active' ? plan : null
+    this.pending = { state: { version: this.state.version + 1, activePlan }, plan }
+    return { ok: true, message }
   }
 
   private buildPlan(
@@ -351,20 +238,14 @@ export class TaskPlanController {
     if (drafts.filter((item) => item.kind === 'verification').length !== 1) {
       return { error: '一个计划必须且只能包含一个 verification。' }
     }
-    const normalizedDrafts = drafts.map((draft) => ({
-      ...draft,
-      outcome: draft.outcome.trim(),
-    }))
-    if (normalizedDrafts.some((draft) => !draft.outcome)) {
-      return { error: '里程碑结果描述不能为空。' }
-    }
-    const items: TaskItem[] = normalizedDrafts.map((draft, index) => ({
+    const items: TaskItem[] = drafts.map((draft, index) => ({
       id: `T${index + 1}`,
       kind: draft.kind,
-      outcome: draft.outcome,
-      status: index === 0 ? 'in_progress' : 'pending',
+      outcome: draft.outcome.trim(),
+      status: draft.status ?? 'pending',
       evidence: [],
     }))
+    if (items.some(item => !item.outcome)) return { error: '里程碑结果描述不能为空。' }
     return {
       plan: activeTaskPlanSchema.parse({
         id: crypto.randomUUID(),
@@ -378,14 +259,11 @@ export class TaskPlanController {
 
   private progressMessage(plan: ActiveTaskPlan, message = '计划已更新'): string {
     const done = plan.items.filter((item) => item.status === 'completed').length
-    const current = plan.items.find((item) => item.status === 'in_progress')
-    const progress = `${message}；进度 ${done}/${plan.items.length}。`
-    if (current) {
-      return `${progress}当前进行中：${current.id}「${current.outcome}」。`
-    }
-    return progress + (done === plan.items.length
-      ? '全部里程碑已完成。'
-      : '当前没有进行中项；继续时先将下一项设为 in_progress。')
+    const running = plan.items.filter(item => item.status === 'in_progress')
+    const progress = `${message}，进度 ${done}/${plan.items.length}。`
+    return progress + (running.length
+      ? `进行中：${running.map(item => `${item.id}「${item.outcome}」`).join('、')}。`
+      : '当前没有进行中的计划项。')
   }
 }
 

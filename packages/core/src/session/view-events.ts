@@ -298,7 +298,6 @@ export function toViewEvent(event: CoreEvent): RecordedViewEvent | null {
     case 'negotiation-decided':
     case 'execution-started':
     case 'consensus-skipped':
-    case 'task-plan-updated':
     case 'task-plan-restored':
       return viewEventSchema.parse(compactViewEvent({ type: 'core-event', event }))
     default:

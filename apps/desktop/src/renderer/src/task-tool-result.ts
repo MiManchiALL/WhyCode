@@ -22,10 +22,12 @@ export function parseTaskToolResult(call: ToolCall): TaskToolResult | null {
     if (
       !record(result) || result.operation !== call.name
       || typeof result.ok !== 'boolean' || typeof result.message !== 'string'
-      || !record(state) || (state.active_plan !== null && !isPlan(state.active_plan))
+      || !record(state) || (state.active_plan !== null && !isPlan(state.active_plan, 'active'))
+      || (state.completed_plan !== undefined && (state.active_plan !== null
+        || call.name !== 'UpdateTaskItem' || !isPlan(state.completed_plan, 'completed')))
     ) return null
     const ok = result.ok && call.status === 'done'
-    const plan = ok ? state.active_plan : null
+    const plan = ok ? state.active_plan ?? state.completed_plan ?? null : null
     return {
       ok,
       message: result.message,
@@ -43,7 +45,7 @@ export function parseTaskToolResult(call: ToolCall): TaskToolResult | null {
 function updatedItemIds(input: unknown, items: TaskItem[]): string[] {
   if (!record(input)) return []
   const changes = Array.isArray(input.changes) ? input.changes.filter(record) : []
-  return items.filter((item) => item.id === input.item_id || changes.some((change) =>
+  return items.filter((item) => changes.some((change) =>
     (change.action === 'edit' && change.item_id === item.id)
     || (change.action === 'add' && typeof change.outcome === 'string'
       && change.outcome.trim() === item.outcome
@@ -60,12 +62,12 @@ function jsonBlock(result: string, tag: 'result' | 'state'): unknown {
   return match ? JSON.parse(match[1]!) : null
 }
 
-function isPlan(value: unknown): value is TaskPlanViewData {
+function isPlan(value: unknown, status: 'active' | 'completed'): value is TaskPlanViewData {
   return record(value)
     && typeof value.goal === 'string'
-    && value.status === 'active'
+    && value.status === status
     && Array.isArray(value.items)
-    && value.items.every(isItem)
+    && value.items.every(item => isItem(item) && (status !== 'completed' || item.status === 'completed'))
 }
 
 function isItem(value: unknown): value is TaskItem {

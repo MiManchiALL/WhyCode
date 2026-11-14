@@ -192,9 +192,9 @@ describe('用户中断后的新回合', () => {
     const remainingSteps = [
       finalStep('TTL 是 Time to Live。'),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T1',
-        status: 'completed',
-        evidence: ['恢复后完成'],
+        changes: [
+          { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['恢复后完成'] },
+        ],
       }),
       finalStep('已按要求恢复。'),
     ]
@@ -236,11 +236,11 @@ describe('用户中断后的新回合', () => {
     const ttlIndex = reopened.initialMessages.findIndex((message) =>
       message.role === 'user' && JSON.stringify(message.content).includes('TTL是什么意思'))
     assert.ok(markerIndex >= 0 && markerIndex < ttlIndex)
-    const restoredPlan = reopened.initialViewEvents.find((entry) =>
-      entry.type === 'core-event' && entry.event.type === 'task-plan-restored')
+    const restoredPlan = reopened.initialViewEvents.findLast((entry) =>
+      entry.type === 'core-event' && entry.event.type === 'task-plan-updated')
     assert.equal(
       restoredPlan?.type === 'core-event'
-      && restoredPlan.event.type === 'task-plan-restored'
+      && restoredPlan.event.type === 'task-plan-updated'
       && restoredPlan.event.plan?.id,
       activePlan().id,
     )
@@ -249,11 +249,10 @@ describe('用户中断后的新回合', () => {
 
     assert.equal(resumed, 'completed')
     const resumeRequestTools = toolNames(model.doStreamCalls[2])
-    assert.equal(resumeRequestTools.includes('ResumeTaskPlan'), false)
     assert.equal(resumeRequestTools.includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
     assert.equal(toolNames(model.doStreamCalls[3]).includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
     assert.match(JSON.stringify(model.doStreamCalls[3]), /核心功能已经实现|完整功能通过验证/)
-    assert.equal(resumedSession.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(resumedSession.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
   })
 
   for (const reason of ['user-cancel', 'process-interruption'] as const) {
@@ -264,7 +263,7 @@ describe('用户中断后的新回合', () => {
         doStream: async (options) => {
           requestCount++
           if (requestCount === 1) {
-            return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { item_id: 'T1', status: 'completed', evidence: ['第一项已验证'] })
+            return completedFirstItem()
           }
           if (requestCount === 2) {
             const response = abortableStep(options.abortSignal)
@@ -289,7 +288,7 @@ describe('用户中断后的新回合', () => {
 
       assert.equal(await running, 'aborted')
       const saved = session.captureTaskStateSnapshot()
-      assert.equal(saved?.activePlan?.items[1]?.status, 'in_progress')
+      assert.equal(saved?.activePlan?.items[0]?.status, 'completed')
       const reopened = await store.open(journal.sessionId)
       assert.deepEqual(reopened.initialTaskState, saved)
       assert.match(JSON.stringify(reopened.initialMessages.findLast(isTurnAbortedMessage)), new RegExp(reason))
@@ -329,7 +328,6 @@ describe('用户中断后的新回合', () => {
     assert.equal(names.includes('ReadFile'), true)
     assert.equal(names.includes('WriteFile'), true)
     assert.equal(names.includes('RunCommand'), true)
-    assert.equal(names.includes('ResumeTaskPlan'), false)
     assert.equal(names.includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
     assert.equal(names.includes(CLOSE_TASK_PLAN_TOOL_NAME), true)
     assert.deepEqual(session.captureTaskStateSnapshot()?.activePlan, activePlan())
@@ -343,7 +341,7 @@ describe('用户中断后的新回合', () => {
     const reopened = await store.open(journal.sessionId)
     const model = new MockLanguageModelV4({
       doStream: [
-        toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { item_id: 'T1', status: 'completed', evidence: ['第一项已验证'] }),
+        completedFirstItem(),
         finalStep('收到，按 Windows 11 处理。'),
       ],
     })
@@ -353,7 +351,7 @@ describe('用户中断后的新回合', () => {
 
     assert.equal(result, 'completed')
     assert.equal(toolNames(model.doStreamCalls[0]).includes(CLOSE_TASK_PLAN_TOOL_NAME), true)
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
   })
 
   it('空闲回答可编辑重发，重启后仍关联同一题并只保留新的回答', async () => {
@@ -411,14 +409,14 @@ describe('用户中断后的新回合', () => {
     await interrupted.recoverInterruptedWork()
     const recovered = await store.open(journal.sessionId)
     assert.deepEqual(recovered.initialTaskState, activeState())
-    const model = new MockLanguageModelV4({ doStream: [toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { item_id: 'T1', status: 'completed', evidence: ['第一项已验证'] }), finalStep('收到，使用 Windows。')] })
+    const model = new MockLanguageModelV4({ doStream: [completedFirstItem(), finalStep('收到，使用 Windows。')] })
     const session = createSession(model, recovered)
 
     assert.equal(
       await answerFirstQuestion(session, 'Windows'),
       'completed',
     )
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
     const request = JSON.stringify(model.doStreamCalls[0]?.prompt)
     assert.match(request, /process-interruption/)
   })
@@ -458,7 +456,7 @@ describe('用户中断后的新回合', () => {
     }
     const model = new MockLanguageModelV4({
       doStream: [
-        toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { item_id: 'T1', status: 'completed', evidence: ['第一项已验证'] }),
+        completedFirstItem(),
         questionStep(),
       ],
     })
@@ -468,7 +466,7 @@ describe('用户中断后的新回合', () => {
     await stepPersisted.promise
     const crashView = await store.open(journal.sessionId)
     assert.equal(hasPendingUserQuestion([...crashView.initialMessages]), true)
-    assert.equal(crashView.initialTaskState.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(crashView.initialTaskState.activePlan?.items[0]?.status, 'completed')
     assert.equal(
       crashView.initialViewEvents.some((entry) =>
         entry.type === 'core-event' && entry.event.type === 'user-question'),
@@ -540,7 +538,7 @@ describe('用户中断后的新回合', () => {
   it('计划工具提交后立即停止保留已更新的任务项', async () => {
     const model = new MockLanguageModelV4({
       doStream: [
-        toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { item_id: 'T1', status: 'completed', evidence: ['第一项已验证'] }),
+        completedFirstItem(),
         finalStep('TTL 是 Time to Live。'),
       ],
     })
@@ -559,15 +557,38 @@ describe('用户中断后的新回合', () => {
     assert.equal(await session.handleUserMessage('继续刚才的任务'), 'aborted')
     assert.equal(events.some((event) => event.type === 'step-discarded'), false)
     assert.equal(events.some((event) => event.type === 'step-committed'), true)
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
 
     assert.equal(await session.handleUserMessage('TTL是什么意思'), 'completed')
     const request = model.doStreamCalls[1]
     const names = toolNames(request)
-    assert.equal(names.includes('ResumeTaskPlan'), false)
     assert.equal(names.includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
     assert.equal(names.includes(CLOSE_TASK_PLAN_TOOL_NAME), true)
     assert.doesNotMatch(JSON.stringify(request), /实现功能|验证功能/)
+  })
+
+  it('在最后一次计划更新后停止，重启可见终态和每一项的完成证据', async () => {
+    const store = new SessionStore(await temporaryDirectory())
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
+    const plan = activePlan()
+    plan.items.forEach(item => { item.status = 'in_progress' })
+    const changes = plan.items.map(item => ({
+      action: 'edit', item_id: item.id, status: 'completed', evidence: [`${item.id} 验证通过`],
+    }))
+    const model = new MockLanguageModelV4({ doStream: [toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes })] })
+    const session = createSession(model, journal, event => {
+      if (event.type === 'tool-end') session.abort()
+    })
+    session.restoreTaskStateSnapshot({ version: 3, activePlan: plan })
+
+    assert.equal(await session.handleUserMessage('提交验收结果'), 'aborted')
+    assert.equal(model.doStreamCalls.length, 1)
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialTaskState, { version: 4, activePlan: null })
+    const plans = reopened.initialViewEvents.flatMap(entry =>
+      entry.type === 'core-event' && entry.event.type === 'task-plan-updated' ? [entry.event.plan] : [])
+    assert.deepEqual(plans.map(update => update.status), ['completed'])
+    assert.deepEqual(plans[0]!.items.map(item => item.evidence), changes.map(change => change.evidence))
   })
 
   it('完整文本 step 的持久化窗口停止不会把已交付回答改判为中断', async () => {
@@ -797,7 +818,7 @@ describe('用户中断后的新回合', () => {
   it('已有计划中止后简短确认开工，首步直接推进计划', async () => {
     let firstRequest = true
     const remainingSteps = [
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { item_id: 'T1', status: 'completed', evidence: ['第一项已验证'] }),
+      completedFirstItem(),
       finalStep('过早结束一'),
     ]
     const model = new MockLanguageModelV4({
@@ -823,12 +844,11 @@ describe('用户中断后的新回合', () => {
 
     assert.equal(result, 'completed')
     assert.equal(model.doStreamCalls.length, 3)
-    assert.equal(toolNames(model.doStreamCalls[1]).includes('ResumeTaskPlan'), false)
     assert.equal(toolNames(model.doStreamCalls[1]).includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
   })
 
-  it('自然结束的零状态随会话重启和 Fork 保留', async () => {
+  it('最后一次更新的终态和证据随会话重启和 Fork 保留', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
     const journal = await store.create({
@@ -838,9 +858,13 @@ describe('用户中断后的新回合', () => {
     const events: CoreEvent[] = []
     const model = new MockLanguageModelV4({
       doStream: [
-        ...['T1', 'T2', 'T3'].map(item_id => toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-          item_id, status: 'completed', evidence: ['项目验证通过'],
-        })),
+        toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: [
+          { action: 'edit', item_id: 'T2', status: 'in_progress' },
+          { action: 'edit', item_id: 'T3', status: 'in_progress' },
+        ] }),
+        toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: ['T1', 'T2', 'T3'].map(item_id => ({
+          action: 'edit', item_id, status: 'completed', evidence: [`${item_id} 已验证`],
+        })) }),
         finalStep('任务已经完成。'),
       ],
     })
@@ -866,12 +890,15 @@ describe('用户中断后的新回合', () => {
     }])
 
     const reopened = await store.open(journal.sessionId)
-    assert.equal(reopened.initialTaskState.activePlan, null)
-    assert.equal(reopened.initialMessages.filter(isClosedTaskStateReminder).length, 1)
-
     const forked = await store.fork(reopened, turnId)
-    assert.equal(forked.initialTaskState.activePlan, null)
-    assert.equal(forked.initialMessages.filter(isClosedTaskStateReminder).length, 1)
+    for (const saved of [reopened, forked]) {
+      assert.equal(saved.initialTaskState.activePlan, null)
+      const terminal = saved.initialViewEvents.findLast(entry =>
+        entry.type === 'core-event' && entry.event.type === 'task-plan-updated')
+      assert.ok(terminal?.type === 'core-event' && terminal.event.type === 'task-plan-updated')
+      assert.equal(terminal.event.plan.status, 'completed')
+      assert.deepEqual(terminal.event.plan.items.map(item => item.evidence), [['T1 已验证'], ['T2 已验证'], ['T3 已验证']])
+    }
   })
 
   it('运行中 urgent steering 仍属于当前回合，可以直接更新计划', async () => {
@@ -968,7 +995,7 @@ describe('用户中断后的新回合', () => {
     assert.equal(session.captureMessageSnapshot().some(isTurnAbortedMessage), false)
   })
 
-  it('暂停前记账会保存自动推进后的当前项，最终回复后不再执行', async () => {
+  it('暂停前保存完成证据，待办项继续等待', async () => {
     let requestCount = 0
     let releaseCurrentStep!: () => void
     const currentStepMayFinish = new Promise<void>((resolve) => {
@@ -986,9 +1013,9 @@ describe('用户中断后的新回合', () => {
         }
         if (requestCount === 3) {
           return textAndToolStep('好的，我先停下来并保存进度。', UPDATE_TASK_ITEM_TOOL_NAME, {
-            item_id: 'T1',
-            status: 'completed',
-            evidence: ['暂停前的实现已经完成'],
+            changes: [
+              { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['暂停前的实现已经完成'] },
+            ],
           })
         }
         if (requestCount === 4) return finalStep('进度已保存，随时说“继续”。')
@@ -1011,7 +1038,7 @@ describe('用户中断后的新回合', () => {
       false,
     )
     assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'pending')
   })
 
   it('steering 后继续工作，最终正文保留未完成进度', async () => {
@@ -1026,9 +1053,9 @@ describe('用户中断后的新回合', () => {
         if (requestCount === 2) return abortableStep(options.abortSignal)
         if (requestCount === 3) {
           return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-            item_id: 'T1',
-            status: 'completed',
-            evidence: ['实现完成'],
+            changes: [
+              { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['实现完成'] },
+            ],
           })
         }
         if (requestCount === 4) {
@@ -1047,7 +1074,7 @@ describe('用户中断后的新回合', () => {
 
     assert.equal(await running, 'completed')
     assert.equal(model.doStreamCalls.length, 5)
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
   })
 
   it('异步提问后的模型步骤消费中断边界', async () => {
@@ -1202,10 +1229,10 @@ function activeState(): TaskPlanState {
   }
 }
 
-function isClosedTaskStateReminder(message: { content: unknown }): boolean {
-  return typeof message.content === 'string'
-    && message.content.includes('<whycode-task-state')
-    && message.content.includes('"active_plan":null')
+function completedFirstItem() {
+  return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: [
+    { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['第一项已验证'] },
+  ] })
 }
 
 function abortableStep(signal?: AbortSignal) {

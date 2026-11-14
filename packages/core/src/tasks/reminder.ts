@@ -14,7 +14,7 @@ export function isTaskProgressReminder(message: ModelMessage): boolean {
 
 /** 从已提交的请求历史计数，跨回合、重启和回滚沿用同一提醒间隔。 */
 export function taskProgressReminder(messages: readonly ModelMessage[], plan: ActiveTaskPlan | null): ModelMessage | null {
-  if (!plan || plan.items.every(item => item.status === 'completed')) return null
+  if (!plan) return null
   let steps = 0
   for (let i = messages.length - 1; i >= 0 && steps < REMINDER_STEPS; i--) {
     const message = messages[i]!
@@ -36,7 +36,7 @@ export function taskProgressReminder(messages: readonly ModelMessage[], plan: Ac
       '<system-reminder>', PROGRESS_OPEN,
       JSON.stringify({ goal: plan.goal, items: plan.items.map(({ id, status, outcome }) => ({ id, status, outcome })) }),
       '</whycode-task-progress>',
-      '这是当前任务计划。结合最新用户要求，有实际进展时再更新。',
+      '这是当前任务计划，仅作进度参考。请结合最新上下文关注任务进展，并在有实际进展时适时更新。',
       '</system-reminder>',
     ].join('\n'),
   }
