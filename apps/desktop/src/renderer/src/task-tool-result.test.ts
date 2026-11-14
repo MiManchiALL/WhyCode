@@ -23,7 +23,9 @@ function state(): TaskPlanState {
 function call(name: string, snapshot = state(), input: unknown = {}, ok = true): ToolCall {
   return {
     id: 'task-call', name, input, status: ok ? 'done' : 'error', progress: '',
-    result: formatTaskToolResult(name, { ok, message: ok ? '计划已更新。' : '当前没有活动任务计划。' }, snapshot),
+    result: formatTaskToolResult(name, ok
+      ? { ok: true, message: '计划已更新。' }
+      : { ok: false, error: 'no_active_plan', message: '当前没有活动任务计划。' }, snapshot),
   }
 }
 
@@ -41,8 +43,8 @@ describe('任务计划工具历史详情', () => {
     const snapshot = state()
     snapshot.activePlan!.items.splice(2, 0, { id: 'T4', kind: 'work', outcome: '新增结果', status: 'pending', evidence: [] })
     const result = parseTaskToolResult(call('UpdateTaskItem', snapshot, {
-      item_id: 'T1', status: 'completed',
       changes: [
+        { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['解析检查通过'] },
         { action: 'edit', item_id: 'T2', outcome: '完成计划展示' },
         { action: 'add', outcome: ' 新增结果 ' },
         { action: 'delete', item_id: 'T5' },
@@ -57,13 +59,28 @@ describe('任务计划工具历史详情', () => {
     assert.deepEqual(ambiguous?.updatedItemIds, [])
   })
 
+  it('最后一次批量更新显示终态及本次完成的各项', () => {
+    const plan = state().activePlan!
+    const completedPlan = {
+      ...plan, status: 'completed' as const,
+      items: plan.items.map(item => ({ ...item, status: 'completed' as const, evidence: [`${item.id} 的验收记录`] })),
+    }
+    const snapshot = { version: 3, activePlan: null }
+    const tool = call('UpdateTaskItem', snapshot, { changes: completedPlan.items.slice(1).map(item =>
+      ({ action: 'edit', item_id: item.id, status: 'completed', evidence: item.evidence })) })
+    tool.result = formatTaskToolResult(tool.name, { ok: true, message: '全部里程碑已完成，计划已关闭。' }, snapshot, completedPlan)
+    const parsed = parseTaskToolResult(tool)
+    assert.deepEqual(parsed?.plan, completedPlan)
+    assert.deepEqual(parsed?.updatedItemIds, ['T2', 'T3'])
+  })
+
   it('关闭显示结束结果；失败和未执行调用不会显示为完成更新', () => {
     const snapshot = state()
     snapshot.activePlan = null
     const closed = call('CloseTaskPlan', snapshot)
     closed.result = formatTaskToolResult(closed.name, { ok: true, message: '任务计划已结束。' }, snapshot)
     assert.deepEqual(parseTaskToolResult(closed), { ok: true, message: '任务计划已结束。', plan: null, updatedItemIds: [] })
-    assert.deepEqual(parseTaskToolResult(call('UpdateTaskItem', state(), { item_id: 'T2', status: 'completed' }, false)), {
+    assert.deepEqual(parseTaskToolResult(call('UpdateTaskItem', state(), { changes: [{ action: 'edit', item_id: 'T2', status: 'completed' }] }, false)), {
       ok: false, message: '当前没有活动任务计划。', plan: null, updatedItemIds: [],
     })
     assert.equal(parseTaskToolResult({ ...call('UpdateTaskItem'), status: 'running' }), null)

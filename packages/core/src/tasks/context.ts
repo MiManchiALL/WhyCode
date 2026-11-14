@@ -1,32 +1,29 @@
-import type { ModelMessage } from 'ai'
-import type { TaskPlanState } from './types.ts'
+import type { TaskMutationResult } from './controller.ts'
+import type { CompletedTaskPlan, TaskPlanState } from './types.ts'
 
 const TASK_STATE_OPEN = '<whycode-task-state schema-version="1">'
 
 export function formatTaskToolResult(
   operation: string,
-  result: { ok: boolean; message: string; error?: string },
+  result: TaskMutationResult,
   state: TaskPlanState,
+  completedPlan?: CompletedTaskPlan,
 ): string {
   const outcome = JSON.stringify({
     ok: result.ok,
     operation,
-    error: result.ok ? null : result.error ?? 'task_operation_failed',
+    error: result.ok ? null : result.error,
     message: result.message,
   })
   return [
     '<whycode-task-result schema-version="1">',
     outcome,
     '</whycode-task-result>',
-    taskStateBlock(state),
+    taskStateBlock(state, completedPlan),
   ].join('\n')
 }
 
-export function taskStateBlock(state: TaskPlanState): string {
-  const payload = JSON.stringify({ version: state.version, active_plan: state.activePlan })
+export function taskStateBlock(state: TaskPlanState, completedPlan?: CompletedTaskPlan): string {
+  const payload = JSON.stringify({ version: state.version, active_plan: state.activePlan, completed_plan: completedPlan })
   return [TASK_STATE_OPEN, payload, '</whycode-task-state>'].join('\n')
-}
-
-export function createTaskStateMessage(state: TaskPlanState): ModelMessage {
-  return { role: 'user', content: ['<system-reminder>', taskStateBlock(state), '</system-reminder>'].join('\n') }
 }

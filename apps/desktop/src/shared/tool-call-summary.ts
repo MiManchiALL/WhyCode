@@ -253,12 +253,15 @@ function subagentDetails(input: ToolInput, result: string | undefined): string {
 }
 
 function taskUpdateSummary(input: ToolInput): ToolCallSummary {
-  const status = input.status === 'in_progress'
-    ? 'in progress'
-    : input.status === 'completed' ? 'complete' : ''
-  const transition = joinWith(' → ', text(input, 'item_id'), status)
-  const changes = Array.isArray(input.changes) ? input.changes.length : 0
-  return parts(transition, fixed(count(changes, 'plan change', 'plan changes')))
+  const changes = Array.isArray(input.changes) ? input.changes : []
+  const transitions: string[] = []
+  for (const change of changes) {
+    const edit = record(change)
+    if (edit?.action !== 'edit') continue
+    const status = edit.status === 'in_progress' ? 'in progress' : edit.status === 'completed' ? 'complete' : ''
+    if (status) transitions.push(joinWith(' → ', text(edit, 'item_id'), status))
+  }
+  return parts(...transitions, fixed(count(changes.length - transitions.length, 'plan change', 'plan changes')))
 }
 
 function protocolSummary(input: ToolInput): string | ToolCallSummary {

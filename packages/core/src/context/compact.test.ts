@@ -196,7 +196,7 @@ describe('全量摘要输入与手动压缩', () => {
       result('reference', '独有 API 参考资料', 'Skill'),
       call('failed', 'Skill', { skillId: 'missing' }),
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'failed', toolName: 'Skill', output: { type: 'error-text', value: '资源不存在' } }] },
-      call('plan', 'UpdateTaskItem', { itemId: '1', status: 'completed' }),
+      call('plan', 'UpdateTaskItem', { changes: [{ action: 'edit', item_id: 'T1', status: 'completed', evidence: ['验证完成'] }] }),
       result('plan', '<whycode-task-result schema-version="1">\n{"ok":true,"message":"验证完成"}\n</whycode-task-result>\n<whycode-task-state schema-version="1">\n整份计划\n</whycode-task-state>', 'UpdateTaskItem'),
       assistant('阶段完成'),
     ]

@@ -351,44 +351,13 @@ describe('ViewTimeline', () => {
     assert.doesNotMatch(JSON.stringify(writer.batches), /discarded/)
   })
 
-  it('任务计划只在所属 step 稳定提交后写入历史', async () => {
+  it('计划已随工具结果写入，实时事件不重复写入时间线', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
-    const event = { type: 'task-plan-updated' as const, plan: taskPlan() }
-
-    timeline.capture(writer, event)
-    timeline.capture(writer, { type: 'step-discarded' })
-    timeline.capture(writer, event)
+    timeline.capture(writer, { type: 'task-plan-updated', plan: taskPlan() })
     timeline.capture(writer, { type: 'step-committed' })
-    await Promise.resolve()
-
-    assert.equal(writer.batches.length, 1)
-    assert.match(JSON.stringify(writer.batches), /完成长任务/)
-  })
-
-  it('旧计划终态与新活动计划分别随各自稳定 step 写入', async () => {
-    const writer = new Writer()
-    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
-    const previous = taskPlan()
-    const closed = {
-      type: 'task-plan-updated' as const,
-      plan: { ...previous, status: 'ended' as const, revision: 2 },
-    }
-    const next = {
-      type: 'task-plan-updated' as const,
-      plan: { ...taskPlan(), id: '22222222-2222-4222-8222-222222222222', goal: '完成新任务' },
-    }
-
-    timeline.capture(writer, closed)
-    timeline.capture(writer, { type: 'step-committed' })
-    timeline.capture(writer, next)
-    timeline.capture(writer, { type: 'step-committed' })
-    await Promise.resolve()
-
-    assert.equal(writer.batches.length, 2)
-    assert.match(JSON.stringify(writer.batches), /ended/)
-    assert.match(JSON.stringify(writer.batches), /完成新任务/)
-    assert.doesNotMatch(JSON.stringify(writer.batches), /task-plan-replaced/)
+    await timeline.flush()
+    assert.deepEqual(writer.batches, [])
   })
 
   it('问题状态由工具结果及用户操作持久化，时间线不重复写入', async () => {

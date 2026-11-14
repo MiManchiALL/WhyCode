@@ -1,18 +1,17 @@
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
 import { formatTaskToolResult } from './context.ts'
-import type {
-  TaskPlanController,
-  TaskMutationResult,
-  TaskPlanItemChange,
-  TaskPlanTransition,
-} from './controller.ts'
+import type { TaskMutationResult, TaskPlanController } from './controller.ts'
 
 export const CREATE_TASK_PLAN_TOOL_NAME = 'CreateTaskPlan'
 export const UPDATE_TASK_ITEM_TOOL_NAME = 'UpdateTaskItem'
 export const CLOSE_TASK_PLAN_TOOL_NAME = 'CloseTaskPlan'
 
+const initialStatus = z.enum(['pending', 'in_progress']).optional()
+const itemId = z.string().regex(/^T\d+$/)
+
 const draftSchema = z.object({
+  status: initialStatus,
   kind: z.enum(['work', 'verification']).describe('普通里程碑用 work；最终整体验证用 verification'),
   outcome: z.string().min(1).describe('该里程碑完成后应达到的结果，不写操作步骤'),
 }).strict()
@@ -20,55 +19,45 @@ const draftSchema = z.object({
 const itemChangeSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('add'),
+    status: initialStatus,
     outcome: z.string().min(1).describe('新增里程碑应达到的结果'),
-    after_item_id: z.string().regex(/^T\d+$/).optional().describe('可选；插在该项之后，默认放在最终验证前'),
+    after_item_id: itemId.optional().describe('可选；插在该项之后，默认放在最终验证前'),
   }).strict(),
   z.object({
     action: z.literal('edit'),
-    item_id: z.string().regex(/^T\d+$/),
+    item_id: itemId,
     outcome: z.string().min(1).optional().describe('修订后的结果描述'),
-    after_item_id: z.string().regex(/^T\d+$/).optional().describe('可选；同时调整到该项之后'),
-  }).strict().refine((change) => change.outcome !== undefined || change.after_item_id !== undefined, {
-    message: 'edit 必须修改结果或顺序',
+    after_item_id: itemId.optional().describe('可选；同时调整到该项之后'),
+    status: z.enum(['in_progress', 'completed']).optional(),
+    evidence: z.array(z.string().trim().min(1)).min(1).optional().describe('完成该项的可核验证据'),
+  }).strict().superRefine((change, ctx) => {
+    if (change.status === undefined && change.outcome === undefined && change.after_item_id === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'edit 需要指定状态、结果描述或顺序' })
+    }
+    if ((change.status === 'completed') !== (change.evidence !== undefined)) {
+      ctx.addIssue({ code: 'custom', path: ['evidence'], message: '仅在设置 completed 时提供 evidence，且不能为空' })
+    }
   }),
   z.object({
     action: z.literal('delete'),
-    item_id: z.string().regex(/^T\d+$/),
+    item_id: itemId,
   }).strict(),
 ])
 
-const updateInputSchema = z.object({
-  changes: z.array(itemChangeSchema).min(1).max(14).optional()
-    .describe('可选；原子添加、修改、删除或重排当前与未来里程碑'),
-  item_id: z.string().regex(/^T\d+$/).optional().describe('可选；要设置状态的里程碑 ID，与 status 同时提供'),
-  status: z.enum(['in_progress', 'completed']).optional()
-    .describe('可选；与 item_id 同时提供。completed 会自动启动下一待办项；无进行中项时可显式设置 in_progress'),
-  evidence: z.array(z.string().min(1)).min(1).optional()
-    .describe('completed 必填；里程碑的可核验完成证据'),
-}).strict().superRefine((input, context) => {
-  const hasItemId = input.item_id !== undefined
-  const hasStatus = input.status !== undefined
-  if (input.changes === undefined && !hasItemId && !hasStatus) {
-    context.addIssue({ code: 'custom', message: '必须提供 changes 或 item_id/status' })
-  }
-  if (hasItemId !== hasStatus) {
-    context.addIssue({ code: 'custom', message: 'item_id 与 status 必须同时提供' })
-  }
-  if (input.status === 'completed' && input.evidence === undefined) {
-    context.addIssue({ code: 'custom', path: ['evidence'], message: 'completed 必须提供 evidence' })
-  }
-  if (input.status !== 'completed' && input.evidence !== undefined) {
-    context.addIssue({ code: 'custom', path: ['evidence'], message: '只有 completed 可以提供 evidence' })
-  }
-})
+export type TaskPlanDraftItem = z.infer<typeof draftSchema>
+export type TaskPlanItemChange = z.infer<typeof itemChangeSchema>
 
 function toolResult(
   controller: TaskPlanController,
   operation: string,
   result: TaskMutationResult,
 ): { data: string; isError: boolean } {
+  const update = result.ok ? controller.pendingUpdate : undefined
   return {
-    data: formatTaskToolResult(operation, result, controller.stateSnapshot),
+    data: formatTaskToolResult(
+      operation, result, update?.state ?? controller.stateSnapshot,
+      update?.plan.status === 'completed' ? update.plan : undefined,
+    ),
     isError: !result.ok,
   }
 }
@@ -79,7 +68,7 @@ export function createTaskPlanTools(controller: TaskPlanController): ToolDefinit
       name: CREATE_TASK_PLAN_TOOL_NAME,
       description: '为复杂目标建立宏观任务计划',
       prompt:
-        '创建 3～7 个结果导向的里程碑，最后一项为整体 verification，首项自动开始。已有活动计划时，新计划会直接替换它。本工具独占模型步骤。',
+        '创建 3～7 个结果导向的里程碑，最后一项为整体验证（verification）。建议在建计划时就将接下来要做的项设为 in_progress，可同时指定多项，其余默认 pending。已有活动计划时直接替换。本工具独占一个模型步骤。',
       inputSchema: z.object({
         goal: z.string().min(1).describe('整个任务最终要达到的可验证结果'),
         items: z.array(draftSchema).min(3).max(7).describe('3～7 个宏观里程碑'),
@@ -97,42 +86,19 @@ export function createTaskPlanTools(controller: TaskPlanController): ToolDefinit
     }),
     buildTool({
       name: UPDATE_TASK_ITEM_TOOL_NAME,
-      description: '原子调整活动计划并推进任务项状态',
+      description: '调整计划项及其进度',
       prompt:
-        '用 changes 原子增删改排当前或未来里程碑；用顶层 item_id/status 设置目标状态，该操作幂等。当前项达到 outcome 后附真实 evidence 设为 completed，会按本次调整后的计划顺序自动启动首个 pending 项；按结果中的当前项继续。删除当前项不会自动推进；没有进行中项时才需显式设置 in_progress。禁止重复 outcome，已完成项不可修改。',
-      inputSchema: updateInputSchema,
+        '用 changes 一次更新一项或多项。add 新增计划项，edit 修改未完成项的结果、顺序或状态，delete 删除未完成项。开始执行时设为 in_progress，达到预期结果后设为 completed 并为该项提供可核验的 evidence。已完成项及其证据不可修改。',
+      inputSchema: z.object({
+        changes: z.array(itemChangeSchema).min(1).max(14),
+      }).strict(),
       isReadOnly: false,
       kind: 'control',
       async execute(input) {
-        const changes: TaskPlanItemChange[] = (input.changes ?? []).map((change) => {
-          if (change.action === 'add') {
-            return {
-              action: 'add',
-              outcome: change.outcome,
-              ...(change.after_item_id ? { afterItemId: change.after_item_id } : {}),
-            }
-          }
-          if (change.action === 'delete') return { action: 'delete', itemId: change.item_id }
-          return {
-            action: 'edit',
-            itemId: change.item_id,
-            ...(change.outcome !== undefined ? { outcome: change.outcome } : {}),
-            ...(change.after_item_id ? { afterItemId: change.after_item_id } : {}),
-          }
-        })
-        const transition: TaskPlanTransition | undefined = input.item_id && input.status
-          ? input.status === 'in_progress'
-            ? { itemId: input.item_id, status: 'in_progress' }
-            : {
-                itemId: input.item_id,
-                status: 'completed',
-                evidence: input.evidence!,
-              }
-          : undefined
         return toolResult(
           controller,
           UPDATE_TASK_ITEM_TOOL_NAME,
-          controller.update(changes, transition),
+          controller.update(input.changes),
         )
       },
     }),
@@ -140,7 +106,7 @@ export function createTaskPlanTools(controller: TaskPlanController): ToolDefinit
       name: CLOSE_TASK_PLAN_TOOL_NAME,
       description: '显式结束当前活动计划',
       prompt:
-        '放弃未完成的计划时调用。本工具独占模型步骤。',
+        '用户明确放弃未完成的计划时调用。无参数，独占一个模型步骤。',
       inputSchema: z.object({}).strict(),
       isReadOnly: false,
       kind: 'control',

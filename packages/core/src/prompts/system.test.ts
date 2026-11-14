@@ -176,9 +176,8 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /以最新用户要求为准/)
     assert.match(prompt, /3～7 个结果导向的里程碑/)
     assert.match(prompt, /整体验证/)
-    assert.match(prompt, /完成时附可核验的证据/)
-    assert.doesNotMatch(prompt, /ResumeTaskPlan|engaged|dormant|resume_required/)
-    assert.doesNotMatch(prompt, /PauseTaskPlan/)
+    assert.match(prompt, /逐项附上真实、可核验的完成证据/)
+    assert.match(prompt, /全部计划项完成时，计划自动关闭/)
   })
 
   it('父代理按需并行委派，在当前回合等待结果并完成用户任务', () => {

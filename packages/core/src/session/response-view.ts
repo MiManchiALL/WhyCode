@@ -1,4 +1,5 @@
 import type { ConversationMessage } from '../context/user-turn.ts'
+import { resolveTaskPlanProgress } from '../tasks/types.ts'
 import { btwToolStepEvents } from './btw.ts'
 import type { SessionEntry } from './types.ts'
 import type { RecordedViewEvent, VisibleCoreEvent, ViewEvent } from './view-events.ts'
@@ -17,13 +18,17 @@ export function responseViewEvents(entry: SessionEntry): ViewEvent[] {
     return [{ type: 'core-event', event: entry.compaction }]
   }
   if (entry.type === 'messages') {
-    return entry.messages.flatMap((message: ConversationMessage) => {
+    const view = entry.messages.flatMap((message: ConversationMessage) => {
       const events: VisibleCoreEvent[] = []
       const meta = message.whycode
       if (meta?.questionBatch) events.push({ type: 'user-question', question: meta.questionBatch })
       if (entry.deliveredInputIds?.length && message.role === 'user' && meta?.questionReply) events.push({ type: 'user-question-resolved', resolutions: meta.questionReply })
       return events.map(event => ({ type: 'core-event' as const, event }))
     })
+    const active = entry.taskState?.activePlan
+    const plan = active ? resolveTaskPlanProgress(active) : entry.terminalPlan
+    if (plan) view.push({ type: 'core-event', event: { type: 'task-plan-updated', plan } })
+    return view
   }
   if (entry.type === 'user-input' && entry.startsTurn && entry.questionReply) {
     return [{ type: 'core-event', event: { type: 'user-question-resolved', resolutions: entry.questionReply } }]

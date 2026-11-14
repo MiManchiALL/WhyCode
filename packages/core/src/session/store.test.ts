@@ -1321,46 +1321,16 @@ describe('SessionStore', () => {
     assert.equal(reopened.metadataSnapshot.status, 'idle')
   })
 
-  it('重启时用权威 TaskPlanState 修复计划卡的窄崩溃窗口', async () => {
+  it('提交计划状态后冷恢复立即能看到对应进度', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const plan = taskPlan(1)
-    const activeState = state(plan)
     await journal.recordTurnStart('create-plan', [message('user', '建立计划')])
-    await journal.recordStep('create-plan', [message('assistant', '计划已建立')], activeState)
-    await journal.recordTurnEnd('create-plan', 'paused')
-
-    const recoveredCreate = await store.open(journal.sessionId)
-    const restoredActive = recoveredCreate.initialViewEvents.findLast((entry) =>
-      entry.type === 'core-event' && entry.event.type === 'task-plan-restored')
-    assert.equal(
-      restoredActive?.type === 'core-event'
-      && restoredActive.event.type === 'task-plan-restored'
-      && restoredActive.event.plan?.id,
-      plan.id,
-    )
-
-    await recoveredCreate.recordViewEvents([{ type: 'core-event', event: {
-      type: 'task-plan-updated',
-      plan,
-    } }])
-    await recoveredCreate.recordTurnStart('close-plan', [message('user', '放弃计划')])
-    await recoveredCreate.recordStep(
-      'close-plan',
-      [message('assistant', '计划已放弃')],
-      state(null, 2),
-    )
-    await recoveredCreate.recordTurnEnd('close-plan', 'completed')
-
-    const recoveredClose = await store.open(journal.sessionId)
-    const restoredNull = recoveredClose.initialViewEvents.findLast((entry) =>
-      entry.type === 'core-event' && entry.event.type === 'task-plan-restored')
-    assert.equal(
-      restoredNull?.type === 'core-event'
-      && restoredNull.event.type === 'task-plan-restored'
-      && restoredNull.event.plan,
-      null,
-    )
+    await journal.recordStep('create-plan', [message('assistant', '已建立计划')], state(plan))
+    const recovered = await store.open(journal.sessionId)
+    assert.deepEqual(recovered.initialViewEvents.at(-1), {
+      type: 'core-event', event: { type: 'task-plan-updated', plan },
+    })
   })
 
   it('终态计划卡作为最新展示在重启后保留', async () => {
@@ -1373,14 +1343,11 @@ describe('SessionStore', () => {
       revision: plan.revision + 1,
     }
     await journal.recordTurnStart('close-plan', [message('user', '放弃计划')])
-    await journal.recordViewEvents([{ type: 'core-event', event: {
-      type: 'task-plan-updated',
-      plan: terminalPlan,
-    } }])
     await journal.recordStep(
       'close-plan',
       [message('assistant', '计划已放弃')],
       state(null, 2),
+      { terminalPlan },
     )
     await journal.recordTurnEnd('close-plan', 'completed')
 
@@ -1413,17 +1380,9 @@ describe('SessionStore', () => {
     })
     const nextState = state(next, 3)
     await journal.recordTurnStart('switch-plan', [message('user', '改做 CSGO')])
-    await journal.recordViewEvents([
-      { type: 'core-event', event: {
-        type: 'task-plan-updated',
-        plan: {
-          ...previous,
-          status: 'ended',
-          revision: previous.revision + 1,
-        },
-      } },
-      { type: 'core-event', event: { type: 'task-plan-updated', plan: next } },
-    ])
+    await journal.recordStep('switch-plan', [message('assistant', '已结束旧计划')], state(null, 2), {
+      terminalPlan: { ...previous, status: 'ended', revision: previous.revision + 1 },
+    })
     await journal.recordStep('switch-plan', [message('assistant', '已建立新计划')], nextState)
     await journal.recordTurnEnd('switch-plan', 'paused')
 
@@ -1434,7 +1393,7 @@ describe('SessionStore', () => {
     assert.deepEqual(planEvents.map((entry) =>
       entry.type === 'core-event' && entry.event.type === 'task-plan-updated'
         ? entry.event.plan.status
-        : null), ['ended', 'active'])
+        : null), ['active', 'ended', 'active'])
     assert.equal('historicalPlans' in reopened.initialTaskState, false)
   })
 

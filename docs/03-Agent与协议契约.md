@@ -475,19 +475,17 @@ P 的摘要输入包含 U 完整原文、同一正式 turn 的旧 P（如有）�
 }
 ```
 
-计划有 2～7 项且最后一项是唯一 verification；最多一个 in_progress。completed 必须有 evidence，未完成项不能带 evidence。模型可见 XML 使用版本化 snake_case 投影，但不得形成第二状态源。
+计划有 2～7 项，最后一项是唯一的 verification。可有零个或多个 in_progress 项。completed 项必须有 evidence，未完成项的 evidence 为空。模型可见 XML 使用版本化的 snake_case 投影。
 
 ### 5.2 工具和转换
 
-- `CreateTaskPlan` 在独占步骤建立 3～7 个里程碑，首项自动开始。已有活动计划时原子替换，成功结果只返回新计划，校验失败保留原计划。
-- `UpdateTaskItem` 可在任一普通 Main 回合修订当前或未来项。进行中项提供完成证据后，按调整后的顺序启动首个待办项。没有进行中项时可显式启动一项，已完成项保持只读。
-- `CloseTaskPlan` 在独占步骤显式结束活动计划，无参数。
+- `CreateTaskPlan` 在独占步骤建立 3～7 个里程碑。各项默认 pending，可在创建时指定 in_progress。已有活动计划时直接替换，成功结果只返回新计划，校验失败保留原计划。
+- `UpdateTaskItem` 通过 `changes` 一次增删、修订、重排或更新多项状态。未完成项可调整，已完成项和证据只读。开始一项需显式设为 in_progress，完成该项时提交可核验的 evidence。其余项沿用各自的状态。
+- `CloseTaskPlan` 在用户明确放弃未完成计划时调用，无参数，独占步骤。全部计划项完成时，最后一次更新自动将计划记为 completed 并清空 activePlan。显式关闭记为 ended。
 
-自动推进只发生在创建或首次成功完成当前项时；重复完成不再次推进，相同状态与证据的幂等重放不增加 revision/version。结构与状态校验失败不提交任何变化；删除当前项不自动启动其它项。最终 verification 自动启动后仍需实际验证和完成证据，全部项完成后不再启动新项。
+一次更新只提交一个修订，任一变更无效则保留原状态。活动计划内重复设置相同状态和证据不会增加 revision 或 version。未完成的计划跨回合保留，停止、普通答复、提问和异步唤醒均可继续更新同一份计划。
 
-每个计划工具结果先返回 `<whycode-task-result schema-version="1">`，再返回最新 `<whycode-task-state schema-version="1">`。创建和更新成功的 message 给出当前项 ID 和结果描述；没有进行中项时明确全部完成或需显式启动下一项。非法转换返回结构化错误和当前状态。
-
-未完成的计划跨回合保留，停止、普通答复、提问和异步唤醒均可继续使用同一份进度。全部里程碑完成后，普通 Main 的无工具答复在同一步将计划记为 completed 并清空 activePlan。显式关闭记为 ended。
+每个工具结果先返回 `<whycode-task-result schema-version="1">`，再返回 `<whycode-task-state schema-version="1">`。创建和更新成功时，message 给出进度及所有进行中项。最后一次更新返回 `active_plan: null`，并通过 `completed_plan` 提供该次完成的计划和证据。非法转换返回结构化错误和当前状态。
 
 活动计划的轻量提醒包含目标、各项 ID、状态与预期结果。自上次创建、更新、进度提醒或压缩注入起，每累计十个已提交的模型步骤，在下一次普通 Main 请求尾部追加一次。计数沿用会话历史，跨回合、重启和回滚均有效。恢复的活动计划在上下文中尚未出现过时，下一次请求直接提供提醒。
 

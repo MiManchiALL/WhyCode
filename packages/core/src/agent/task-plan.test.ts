@@ -25,98 +25,64 @@ import { validateToolInput } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
 describe('Main 长任务端到端控制', () => {
-  it('UpdateTaskItem 只接受扁平严格的新协议', async () => {
-    const update = createTaskPlanTools(new TaskPlanController()).find((tool) => tool.name === UPDATE_TASK_ITEM_TOOL_NAME)
-    assert.ok(update)
-    const accepts = async (input: unknown) => (await validateToolInput(update, input)).success
-
-    assert.equal(await accepts({ item_id: 'T1', status: 'in_progress' }), true)
-    assert.equal(await accepts({
-      changes: [{ action: 'edit', item_id: 'T2', outcome: '调用方已经统一' }],
-      item_id: 'T1',
-      status: 'completed',
-      evidence: ['验证通过'],
-    }), true)
-    assert.equal(await accepts({
-      transition: { item_id: 'T1', status: 'in_progress' },
-    }), false)
-    assert.equal(await accepts({
-      item_id: 'T1', status: 'completed',
-    }), false)
-    assert.equal(await accepts({
-      item_id: 'T1', status: 'blocked',
-      blocked_reason: '旧原因',
-    }), false)
-    assert.equal(await accepts({ evidence: ['游离证据'] }), false)
+  it('工具输入按项校验状态和完成证据', async () => {
+    const update = createTaskPlanTools(new TaskPlanController()).find(tool => tool.name === UPDATE_TASK_ITEM_TOOL_NAME)!
+    const accepts = async (changes: unknown[]) => (await validateToolInput(update, { changes })).success
+    const edit = { action: 'edit', item_id: 'T1' }
+    assert.equal(await accepts([
+      { ...edit, status: 'completed', evidence: ['核心测试通过'] },
+      { ...edit, item_id: 'T2', status: 'in_progress' },
+    ]), true)
+    assert.equal(await accepts([{ ...edit, status: 'completed' }]), false)
+    assert.equal(await accepts([{ ...edit, status: 'completed', evidence: ['  '] }]), false)
+    assert.equal(await accepts([{ ...edit, status: 'in_progress', evidence: ['游离证据'] }]), false)
+    assert.equal(await accepts([edit]), false)
   })
 
-  it('创建与完成自动推进，工具结果、界面事件和后续请求使用同一状态', async () => {
+  it('并行里程碑最后一次工具更新即关闭，后续模型请求和界面看到同一结果', async () => {
     const model = modelWithSteps([
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '交付可靠功能',
         items: [
-          { kind: 'work', outcome: '核心功能已经实现' },
-          { kind: 'work', outcome: '相关调用已经统一' },
+          { kind: 'work', outcome: '核心功能已经实现', status: 'in_progress' },
+          { kind: 'work', outcome: '相关调用已经统一', status: 'in_progress' },
           { kind: 'verification', outcome: '完整功能通过验证' },
         ],
       }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T1',
-        status: 'completed',
-        evidence: ['实现文件已检查'],
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T2',
-        status: 'completed',
-        evidence: ['调用检查通过'],
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T3',
-        status: 'completed',
-        evidence: ['自动化测试通过'],
-      }),
+      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: [
+        { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['实现文件已检查'] },
+        { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['调用检查通过'] },
+        { action: 'edit', item_id: 'T3', status: 'in_progress' },
+      ] }),
+      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: [
+        { action: 'edit', item_id: 'T3', status: 'completed', evidence: ['自动化测试通过'] },
+      ] }),
       finalStep('全部完成'),
     ])
     const { session, events } = createSession(model)
-
-    const result = await session.handleUserMessage('完成复杂任务')
-
-    assert.equal(result, 'completed')
-    assert.equal(model.doStreamCalls.length, 5)
-    const taskTools = JSON.stringify(model.doStreamCalls[0]?.tools)
-    assert.match(taskTools, /item_id/)
-    assert.doesNotMatch(taskTools, /transition/)
-    assert.match(JSON.stringify(model.doStreamCalls[1]), /交付可靠功能|T1/)
-    assert.match(JSON.stringify(model.doStreamCalls[1]), /whycode-task-state/)
-    assert.doesNotMatch(taskTools, /ResumeTaskPlan/)
-    assert.match(JSON.stringify(model.doStreamCalls[4]), /active_plan/)
-    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[4]), /historical_plans/)
-    assert.match(JSON.stringify(model.doStreamCalls[4]), /completed/)
-    for (const call of model.doStreamCalls.slice(1)) {
-      assert.deepEqual(call.tools, model.doStreamCalls[0]?.tools)
-    }
-    const updates = events.filter((event) => event.type === 'task-plan-updated')
-    assert.equal(updates.length, 5)
-    assert.deepEqual(updates.slice(0, 4).map((event) => event.plan.items.map((item) => item.status)), [
-      ['in_progress', 'pending', 'pending'],
-      ['completed', 'in_progress', 'pending'],
+    assert.equal(await session.handleUserMessage('完成复杂任务'), 'completed')
+    assert.equal(model.doStreamCalls.length, 4)
+    const updates = events.filter(event => event.type === 'task-plan-updated')
+    assert.deepEqual(updates.map(event => event.plan.status), ['active', 'active', 'completed'])
+    assert.deepEqual(updates.map(event => event.plan.items.map(item => item.status)), [
+      ['in_progress', 'in_progress', 'pending'],
       ['completed', 'completed', 'in_progress'],
       ['completed', 'completed', 'completed'],
     ])
-    const results = events.filter((event) => event.type === 'tool-end')
-    assert.equal(results.length, 4)
+    const results = events.filter(event => event.type === 'tool-end')
+    assert.equal(results.length, 3)
     for (const [index, event] of results.entries()) {
       assert.equal(event.isError, false)
       const state = String(event.result).match(/<whycode-task-state schema-version="1">\n(.+)\n<\/whycode-task-state>/)
       assert.ok(state)
-      assert.deepEqual(JSON.parse(state[1]!).active_plan, updates[index]?.plan)
-      assert.match(JSON.stringify(model.doStreamCalls[index + 1]?.prompt), /whycode-task-state/)
+      const { active_plan, completed_plan } = JSON.parse(state[1]!)
+      assert.deepEqual(active_plan ?? completed_plan, updates[index]!.plan)
+      const next = model.doStreamCalls[index + 1]!
+      assert.deepEqual(next.tools, model.doStreamCalls[0]!.tools)
+      assert.ok(JSON.stringify(next.prompt).includes(JSON.stringify(state[0]).slice(1, -1)))
+      if (index === results.length - 1) assert.equal(active_plan, null)
     }
-    assert.match(String(results[0]?.result), /当前进行中：T1「核心功能已经实现」/)
-    assert.match(String(results[1]?.result), /T1 已完成.*当前进行中：T2「相关调用已经统一」/)
-    assert.match(String(results[2]?.result), /T2 已完成.*当前进行中：T3「完整功能通过验证」/)
-    assert.match(String(results[3]?.result), /全部里程碑已完成/)
-    assert.equal(updates.at(-1)?.type === 'task-plan-updated' && updates.at(-1)?.plan.status, 'completed')
+    assert.deepEqual(session.captureTaskStateSnapshot(), { version: 3, activePlan: null })
   })
 
   it('最终正文与后续普通问答保留未完成计划', async () => {
@@ -141,14 +107,12 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(model.doStreamCalls.length, 2)
     assert.equal(events.some((event) => event.type === 'error'), false)
     assert.equal(session.captureTaskStateSnapshot()?.activePlan?.goal, '不能半途结束')
-    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 0)
     const updates = events.filter((event) => event.type === 'task-plan-updated')
     assert.deepEqual(updates.map(event => event.plan.status), ['active'])
 
     assert.equal(await session.handleUserMessage('后续普通问题一'), 'completed')
-    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 0)
     assert.equal(await session.handleUserMessage('后续普通问题二'), 'completed')
-    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 0)
+    assert.deepEqual(session.captureTaskStateSnapshot()?.activePlan, updates[0]!.plan)
   })
 
   it('连续十个已提交步骤后在请求末尾提醒最新进度', async () => {
@@ -156,7 +120,7 @@ describe('Main 长任务端到端控制', () => {
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '完成长时间排查',
         items: [
-          { kind: 'work', outcome: '问题根因已经确认并修复' },
+          { kind: 'work', outcome: '问题根因已经确认并修复', status: 'in_progress' },
           { kind: 'work', outcome: '受影响路径已经统一' },
           { kind: 'verification', outcome: '修复通过整体验证' },
         ],
@@ -166,19 +130,21 @@ describe('Main 长任务端到端控制', () => {
         (_, offset) => toolStep('ListDir', { path: '.', limit: 1, offset }),
       ),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T1',
-        status: 'completed',
-        evidence: ['排查和修复完成'],
+        changes: [
+          { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['排查和修复完成'] },
+          { action: 'edit', item_id: 'T2', status: 'in_progress' },
+        ],
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T2',
-        status: 'completed',
-        evidence: ['调用路径检查通过'],
+        changes: [
+          { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['调用路径检查通过'] },
+          { action: 'edit', item_id: 'T3', status: 'in_progress' },
+        ],
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T3',
-        status: 'completed',
-        evidence: ['测试通过'],
+        changes: [
+          { action: 'edit', item_id: 'T3', status: 'completed', evidence: ['测试通过'] },
+        ],
       }),
       finalStep('完成。'),
     ])
@@ -194,12 +160,15 @@ describe('Main 长任务端到端控制', () => {
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '验收跨回合功能',
         items: [
-          { kind: 'work', outcome: '实现已提交' },
+          { kind: 'work', outcome: '实现已提交', status: 'in_progress' },
           { kind: 'work', outcome: '调用已接通' },
           { kind: 'verification', outcome: '验收已完成' },
         ],
       }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { item_id: 'T1', status: 'completed', evidence: ['提交通过检查'] }),
+      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: [
+        { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['提交通过检查'] },
+        { action: 'edit', item_id: 'T2', status: 'in_progress' },
+      ] }),
       ...Array.from({ length: 10 }, () => finalStep('已回复。')),
     ])
     const { session } = createSession(model)
@@ -213,7 +182,7 @@ describe('Main 长任务端到端控制', () => {
     reopened.restoreTaskStateSnapshot(session.captureTaskStateSnapshot()!)
     await reopened.handleUserMessage('还剩哪些工作')
     const tail = JSON.stringify(nextModel.doStreamCalls[0]?.prompt.at(-1))
-    assert.match(tail, /whycode-task-progress/)
+    assert.ok(tail.includes('这是当前任务计划，仅作进度参考。请结合最新上下文关注任务进展，并在有实际进展时适时更新。'))
     const reminders = reopened.captureMessageSnapshot().filter(isTaskProgressReminder)
     assert.equal(reminders.length, 1)
     const body = String(reminders[0]!.content).split('\n')[2]!
@@ -424,12 +393,10 @@ describe('Main 长任务端到端控制', () => {
     const model = modelWithSteps([
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         changes: [
-          { action: 'edit', item_id: 'T2', outcome: '所有调用路径已经统一' },
+          { action: 'edit', item_id: 'T2', outcome: '所有调用路径已经统一', status: 'in_progress' },
+          { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['当前里程碑已经验证'] },
           { action: 'add', outcome: '迁移后的数据已经收口', after_item_id: 'T2' },
         ],
-        item_id: 'T1',
-        status: 'completed',
-        evidence: ['当前里程碑已经验证'],
       }),
       finalStep('计划路线已经更新。'),
     ])
@@ -508,19 +475,21 @@ describe('Main 长任务端到端控制', () => {
   it('正式共识执行可以直接更新既有计划', async () => {
     const model = modelWithSteps([
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T1',
-        status: 'completed',
-        evidence: ['执行包已落地'],
+        changes: [
+          { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['执行包已落地'] },
+          { action: 'edit', item_id: 'T2', status: 'in_progress' },
+        ],
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T2',
-        status: 'completed',
-        evidence: ['调用路径已收口'],
+        changes: [
+          { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['调用路径已收口'] },
+          { action: 'edit', item_id: 'T3', status: 'in_progress' },
+        ],
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T3',
-        status: 'completed',
-        evidence: ['执行包已验证'],
+        changes: [
+          { action: 'edit', item_id: 'T3', status: 'completed', evidence: ['执行包已验证'] },
+        ],
       }),
       finalStep('共识执行完成'),
     ])
@@ -530,6 +499,7 @@ describe('Main 长任务端到端控制', () => {
     const result = await session.handleExecutionMessage('[内部执行包] 落地获胜方案')
 
     assert.equal(result, 'completed')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
     assertStableTaskPlanTools(toolNames(model.doStreamCalls[0]))
     assertStableTaskPlanTools(toolNames(model.doStreamCalls[1]))
   })
@@ -602,18 +572,7 @@ function createSession(model: MockLanguageModelV4, projectDir: string = process.
   }
 }
 
-function countClosedTaskStateReminders(messages: ModelMessage[]): number {
-  return messages.filter((message) =>
-    typeof message.content === 'string'
-    && message.content.includes('<whycode-task-state')
-    && message.content.includes('"active_plan":null'),
-  ).length
-}
-
 function assertStableTaskPlanTools(names: string[]): void {
-  assert.equal(names.includes('ResumeTaskPlan'), false)
-  assert.equal(names.includes('ReplaceTaskPlan'), false)
-  assert.equal(names.includes('AddTaskItem'), false)
   for (const name of [
     CREATE_TASK_PLAN_TOOL_NAME,
     UPDATE_TASK_ITEM_TOOL_NAME,
