@@ -335,10 +335,6 @@ html[data-wc-panel-resizing='true']::after {
   transform-origin: center;
 }
 
-.wc-plan-active-dot[data-historical='true']::after {
-  content: none;
-}
-
 .wc-thinking-heart {
   display: block;
   width: 2.15rem;

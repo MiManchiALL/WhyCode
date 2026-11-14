@@ -71,18 +71,42 @@ describe('Main 长任务端到端控制', () => {
     ])
     const results = events.filter(event => event.type === 'tool-end')
     assert.equal(results.length, 3)
+    assert.deepEqual(results.map(event => event.result), [
+      '已建立计划「交付可靠功能」，进度 0/3。\nT1 [in_progress] 核心功能已经实现\nT2 [in_progress] 相关调用已经统一\nT3 [pending] 完整功能通过验证（整体验证）',
+      '已完成 T1「核心功能已经实现」。\n已完成 T2「相关调用已经统一」。\n已开始 T3，进度 2/3。进行中：T3「完整功能通过验证」。',
+      '计划已完成并自动关闭，进度 3/3。',
+    ])
     for (const [index, event] of results.entries()) {
       assert.equal(event.isError, false)
-      const state = String(event.result).match(/<whycode-task-state schema-version="1">\n(.+)\n<\/whycode-task-state>/)
-      assert.ok(state)
-      const { active_plan, completed_plan } = JSON.parse(state[1]!)
-      assert.deepEqual(active_plan ?? completed_plan, updates[index]!.plan)
       const next = model.doStreamCalls[index + 1]!
       assert.deepEqual(next.tools, model.doStreamCalls[0]!.tools)
-      assert.ok(JSON.stringify(next.prompt).includes(JSON.stringify(state[0]).slice(1, -1)))
-      if (index === results.length - 1) assert.equal(active_plan, null)
+      const part = next.prompt.flatMap(message => message.role === 'tool' ? message.content : [])
+        .find(part => part.type === 'tool-result' && part.toolCallId === event.toolUseId)
+      assert.ok(part?.type === 'tool-result')
+      assert.deepEqual(part.output, { type: 'text', value: event.result })
     }
+    assert.deepEqual(updates[2]!.plan.items.map(item => item.evidence),
+      [['实现文件已检查'], ['调用检查通过'], ['自动化测试通过']])
     assert.deepEqual(session.captureTaskStateSnapshot(), { version: 3, activePlan: null })
+  })
+
+  it('更新无效编号只返回错误与可用编号，提前关闭只返回已完成进度', async () => {
+    const model = modelWithSteps([
+      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: [{ action: 'delete', item_id: 'T9' }] }),
+      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {}),
+      finalStep('已结束旧计划。'),
+    ])
+    const { session, events } = createSession(model)
+    session.restoreTaskStateSnapshot(activeState())
+    assert.equal(await session.handleUserMessage('原计划已经不适用'), 'completed')
+    const expectedError = 'item_not_found：任务项不存在：T9。当前计划项：T1「剩余核心功能已经完成」、T2「相关调用路径已经统一」、T3「整体结果通过验证」。'
+    const error = model.doStreamCalls[1]!.prompt.findLast(message => message.role === 'tool')?.content[0]
+    assert.ok(error?.type === 'tool-result')
+    assert.deepEqual(error.output, { type: 'error-text', value: expectedError })
+    const receipts = events.filter(event => event.type === 'tool-end')
+    assert.deepEqual(receipts.map(event => [event.isError, event.result]),
+      [[true, expectedError], [false, '计划已按要求结束，已完成 0/3。']])
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 
   it('最终正文与后续普通问答保留未完成计划', async () => {
@@ -166,6 +190,7 @@ describe('Main 长任务端到端控制', () => {
         ],
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: [
+        { action: 'add', after_item_id: 'T1', outcome: '旧配置可用' },
         { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['提交通过检查'] },
         { action: 'edit', item_id: 'T2', status: 'in_progress' },
       ] }),
@@ -190,8 +215,9 @@ describe('Main 长任务端到端控制', () => {
       goal: '验收跨回合功能',
       items: [
         { id: 'T1', status: 'completed', outcome: '实现已提交' },
-        { id: 'T2', status: 'in_progress', outcome: '调用已接通' },
-        { id: 'T3', status: 'pending', outcome: '验收已完成' },
+        { id: 'T2', status: 'pending', outcome: '旧配置可用' },
+        { id: 'T3', status: 'in_progress', outcome: '调用已接通' },
+        { id: 'T4', status: 'pending', outcome: '验收已完成' },
       ],
     })
     await reopened.handleUserMessage('换个问题')
@@ -225,23 +251,28 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(await answerFirstQuestion(session, 'Windows'), 'completed')
     const request = JSON.stringify(model.doStreamCalls[0]?.prompt)
     assert.match(request, /whycode-compact-summary/)
-    assert.match(request, /whycode-task-state/)
-    assert.match(request, new RegExp(activePlan().id))
-    assert.ok(request.indexOf('whycode-task-state') < request.indexOf(answer))
+    assert.match(request, /当前任务计划「完成旧的复杂任务」，进度 0\/3。/)
+    assert.doesNotMatch(request, new RegExp(activePlan().id))
+    assert.ok(request.indexOf('当前任务计划「') < request.indexOf(answer))
     assert.doesNotMatch(request, /刚刚压缩完成，继续/)
   })
 
   it('手动压缩保留活动计划', async () => {
     const manualModel = compactingModel([])
     const { session } = createSession(manualModel)
-    session.restoreTaskStateSnapshot(activeState())
+    const state = activeState()
+    Object.assign(state.activePlan!.items[0]!, { status: 'completed', evidence: ['长测试的独立证据'] })
+    session.restoreTaskStateSnapshot(state)
     session.restoreMessageSnapshot([
       { role: 'user', content: '手动压缩此前对话' },
       { role: 'assistant', content: '此前回答'.repeat(20_000) },
     ])
     await session.compactNow()
     const manualContext = JSON.stringify(session.captureMessageSnapshot())
-    assert.match(manualContext, /whycode-task-state/)
+    assert.match(manualContext, /当前任务计划「完成旧的复杂任务」，进度 1\/3。/)
+    assert.match(manualContext, /T1 \[completed\] 剩余核心功能已经完成/)
+    assert.match(manualContext, /T3 \[pending\] 整体结果通过验证（整体验证）/)
+    assert.doesNotMatch(manualContext, /长测试的独立证据|active_plan|revision/)
   })
 
   it('完整压缩只重建曾产生过的当前 TaskState', async () => {
@@ -259,8 +290,7 @@ describe('Main 长任务端到端控制', () => {
     await closedSession.compactNow()
 
     const closedContext = JSON.stringify(closedSession.captureMessageSnapshot())
-    assert.match(closedContext, /whycode-task-state/)
-    assert.match(closedContext, /active_plan\\?\":null/)
+    assert.match(closedContext, /当前没有活动计划。/)
 
     const untouchedModel = compactingModel([])
     const { session: untouchedSession } = createSession(untouchedModel)
@@ -273,7 +303,7 @@ describe('Main 长任务端到端控制', () => {
 
     assert.doesNotMatch(
       JSON.stringify(untouchedSession.captureMessageSnapshot()),
-      /whycode-task-state/,
+      /当前任务计划「|当前没有活动计划/,
     )
   })
 
@@ -383,7 +413,7 @@ describe('Main 长任务端到端控制', () => {
     const updates = events.filter((event) => event.type === 'task-plan-updated')
     assert.deepEqual(updates.map(event => event.plan.status), ['active'])
     assert.equal(session.captureTaskStateSnapshot()?.activePlan?.goal, '完整开发 CSGO 网页游戏')
-    const created = events.find(event => event.type === 'tool-end' && typeof event.result === 'string' && event.result.includes('<whycode-task-result'))
+    const created = events.find(event => event.type === 'tool-end')
     assert.ok(created?.type === 'tool-end' && !created.isError && typeof created.result === 'string')
     assert.doesNotMatch(created.result, /旧的复杂任务|覆盖|替换/)
     assert.equal(events.some((event) => event.type === 'task-plan-restored'), false)
@@ -409,7 +439,7 @@ describe('Main 长任务端到端控制', () => {
     assert.ok(changed?.type === 'task-plan-updated' && changed.plan.status === 'active')
     assert.equal(changed.plan.items.find((item) => item.id === 'T2')?.outcome, '所有调用路径已经统一')
     assert.equal(changed.plan.items.find((item) => item.id === 'T2')?.status, 'in_progress')
-    assert.equal(changed.plan.items.some((item) => item.id === 'T4'), true)
+    assert.equal(changed.plan.items[2]?.outcome, '迁移后的数据已经收口')
   })
 
   it('模型选择只回答新请求时，代码不会强制切换或唤醒旧计划', async () => {

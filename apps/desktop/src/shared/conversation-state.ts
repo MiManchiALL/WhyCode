@@ -362,7 +362,7 @@ function applyStableCoreEvent(
           id: event.toolUseId,
           name: event.toolName,
           ...(answers ? { questionAnswers: answers } : {}),
-          input: visibleToolInput(state, event.toolName, event.input),
+          input: event.input,
           status: 'running',
           progress: '',
         },
@@ -522,21 +522,6 @@ export function appendUserMessage(
     ...(skills.length ? { skills: skills.map((item) => structuredClone(item)) } : {}),
     ...(btw ? { btw: structuredClone(btw) } : {}),
   })
-}
-
-function visibleToolInput(
-  state: ConversationState,
-  toolName: string,
-  input: unknown,
-): unknown {
-  if (
-    toolName !== 'CloseTaskPlan'
-    || !state.taskPlan
-    || input === null
-    || typeof input !== 'object'
-    || Array.isArray(input)
-  ) return input
-  return { ...input, plan_id: state.taskPlan.id }
 }
 
 function resetPendingQuestions(state: ConversationState, questions: PendingQuestion[]): ConversationState {

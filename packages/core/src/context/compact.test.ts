@@ -198,12 +198,16 @@ describe('全量摘要输入与手动压缩', () => {
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'failed', toolName: 'Skill', output: { type: 'error-text', value: '资源不存在' } }] },
       call('plan', 'UpdateTaskItem', { changes: [{ action: 'edit', item_id: 'T1', status: 'completed', evidence: ['验证完成'] }] }),
       result('plan', '<whycode-task-result schema-version="1">\n{"ok":true,"message":"验证完成"}\n</whycode-task-result>\n<whycode-task-state schema-version="1">\n整份计划\n</whycode-task-state>', 'UpdateTaskItem'),
+      call('missing-item', 'UpdateTaskItem', { changes: [{ action: 'delete', item_id: 'T9' }] }),
+      result('missing-item', '<whycode-task-result schema-version="1">\n{"ok":false,"error":"item_not_found","message":"任务项不存在：T9"}\n</whycode-task-result>\n<whycode-task-state schema-version="1">\n失败附带的旧计划\n</whycode-task-state>', 'UpdateTaskItem', 'error-text'),
       assistant('阶段完成'),
     ]
     const model = summaryModel(['摘要'])
     await compact(model, messages, { mode: 'manual' })
     const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt)
-    assert.doesNotMatch(prompt, /旧计划全文|旧进度提醒|SKILL_BODY_UNIQUE|整份计划/)
+    assert.doesNotMatch(prompt, /旧计划全文|旧进度提醒|SKILL_BODY_UNIQUE|整份计划|失败附带的旧计划/)
+    assert.match(prompt, /item_not_found/)
+    assert.match(prompt, /任务项不存在：T9/)
     assert.match(prompt, /独有 API 参考资料/); assert.match(prompt, /资源不存在/); assert.match(prompt, /验证完成/)
     const quotedRule = root('B', '<system-reminder>\n<whycode-task-state schema-version="1">\n请修改此格式')
     assert.deepEqual(compactionConversation([quotedRule]), [quotedRule])
@@ -285,6 +289,6 @@ const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cac
 function call(id: string, toolName: string, input: unknown): ModelMessage {
   return { role: 'assistant', content: [{ type: 'tool-call', toolCallId: id, toolName, input }] }
 }
-function result(id: string, value: string, toolName = 'ReadFile'): ModelMessage {
-  return { role: 'tool', content: [{ type: 'tool-result', toolCallId: id, toolName, output: { type: 'text', value } }] }
+function result(id: string, value: string, toolName = 'ReadFile', type: 'text' | 'error-text' = 'text'): ModelMessage {
+  return { role: 'tool', content: [{ type: 'tool-result', toolCallId: id, toolName, output: { type, value } }] }
 }

@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
-import { formatTaskToolResult } from './context.ts'
 import type { TaskMutationResult, TaskPlanController } from './controller.ts'
 
 export const CREATE_TASK_PLAN_TOOL_NAME = 'CreateTaskPlan'
@@ -47,17 +46,9 @@ const itemChangeSchema = z.discriminatedUnion('action', [
 export type TaskPlanDraftItem = z.infer<typeof draftSchema>
 export type TaskPlanItemChange = z.infer<typeof itemChangeSchema>
 
-function toolResult(
-  controller: TaskPlanController,
-  operation: string,
-  result: TaskMutationResult,
-): { data: string; isError: boolean } {
-  const update = result.ok ? controller.pendingUpdate : undefined
+function toolResult(result: TaskMutationResult) {
   return {
-    data: formatTaskToolResult(
-      operation, result, update?.state ?? controller.stateSnapshot,
-      update?.plan.status === 'completed' ? update.plan : undefined,
-    ),
+    data: result.ok ? result.message : `${result.error}：${result.message}`,
     isError: !result.ok,
   }
 }
@@ -77,46 +68,34 @@ export function createTaskPlanTools(controller: TaskPlanController): ToolDefinit
       kind: 'control',
       requiresStandaloneStep: true,
       async execute(input) {
-        return toolResult(
-          controller,
-          CREATE_TASK_PLAN_TOOL_NAME,
-          controller.create(input.goal, input.items),
-        )
+        return toolResult(controller.create(input.goal, input.items))
       },
     }),
     buildTool({
       name: UPDATE_TASK_ITEM_TOOL_NAME,
       description: '调整计划项及其进度',
       prompt:
-        '用 changes 一次更新一项或多项。add 新增计划项，edit 修改未完成项的结果、顺序或状态，delete 删除未完成项。开始执行时设为 in_progress，达到预期结果后设为 completed 并为该项提供可核验的 evidence。已完成项及其证据不可修改。',
+        '用 changes 一次更新一项或多项。T1、T2 等按位置编号，整批引用调用开始时的编号，提交后按新顺序编号。add 新增计划项，edit 修改未完成项的结果、顺序或状态，delete 删除未完成项。开始执行时设为 in_progress，达到预期结果后设为 completed 并为该项提供可核验的 evidence。已完成项及其证据不可修改。',
       inputSchema: z.object({
         changes: z.array(itemChangeSchema).min(1).max(14),
       }).strict(),
       isReadOnly: false,
       kind: 'control',
       async execute(input) {
-        return toolResult(
-          controller,
-          UPDATE_TASK_ITEM_TOOL_NAME,
-          controller.update(input.changes),
-        )
+        return toolResult(controller.update(input.changes))
       },
     }),
     buildTool({
       name: CLOSE_TASK_PLAN_TOOL_NAME,
       description: '显式结束当前活动计划',
       prompt:
-        '用户明确放弃未完成的计划时调用。无参数，独占一个模型步骤。',
+        `当前计划整体已不再适用，或用户明确放弃时调用。局部调整用 ${UPDATE_TASK_ITEM_TOOL_NAME}，暂时等待时保留计划。无参数，独占一个模型步骤。`,
       inputSchema: z.object({}).strict(),
       isReadOnly: false,
       kind: 'control',
       requiresStandaloneStep: true,
       async execute() {
-        return toolResult(
-          controller,
-          CLOSE_TASK_PLAN_TOOL_NAME,
-          controller.close(),
-        )
+        return toolResult(controller.close())
       },
     }),
   ]

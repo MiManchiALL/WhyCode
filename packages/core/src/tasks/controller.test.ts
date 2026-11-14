@@ -24,7 +24,12 @@ describe('Main 长任务计划控制器', () => {
       { ...drafts[0]!, status: 'in_progress' }, { ...drafts[1]!, status: 'in_progress' }, drafts[2]!,
     ])
     assert.equal(result.ok, true)
-    assert.match(result.message, /T1.*核心能力已经可用.*T2.*相关调用方已经统一/)
+    assert.equal(result.message, [
+      '已建立计划「交付功能」，进度 0/3。',
+      'T1 [in_progress] 核心能力已经可用',
+      'T2 [in_progress] 相关调用方已经统一',
+      'T3 [pending] 整体行为通过验证（整体验证）',
+    ].join('\n'))
     const staged = controller.pendingUpdate!
     assert.deepEqual(staged.plan.items.map((item) => item.status), [
       'in_progress',
@@ -63,12 +68,13 @@ describe('Main 长任务计划控制器', () => {
       { action: 'add', after_item_id: 'T2', outcome: '迁移路径已经验证', status: 'in_progress' },
     ])
     assert.ok(started.ok)
-    assert.deepEqual(commit(controller)?.plan.items.map(item => [item.id, item.status]), [
-      ['T1', 'in_progress'], ['T2', 'in_progress'], ['T4', 'in_progress'], ['T3', 'pending'],
+    assert.match(started.message, /在 T2 后新增 T3「迁移路径已经验证」（进行中）/)
+    assert.deepEqual(commit(controller)?.plan.items.map(item => item.status), [
+      'in_progress', 'in_progress', 'in_progress', 'pending',
     ])
 
     const revised = controller.update([
-      { action: 'edit', item_id: 'T4', after_item_id: 'T1' },
+      { action: 'edit', item_id: 'T3', after_item_id: 'T1' },
       { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['核心测试通过'] },
       { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['调用方检查通过'] },
     ])
@@ -76,12 +82,36 @@ describe('Main 长任务计划控制器', () => {
     const update = commit(controller)!
     assert.equal(update.state.version, 3)
     assert.equal(update.plan.revision, 3)
-    assert.deepEqual(update.plan.items.map(item => [item.id, item.status]), [
-      ['T1', 'completed'], ['T4', 'in_progress'], ['T2', 'completed'], ['T3', 'pending'],
+    assert.deepEqual(update.plan.items.map(item => [item.outcome, item.status]), [
+      ['核心能力已经可用', 'completed'], ['迁移路径已经验证', 'in_progress'],
+      ['所有调用方使用统一协议', 'completed'], ['整体行为通过验证', 'pending'],
     ])
+    assert.match(revised.message, /原 T3 已移至 T2「迁移路径已经验证」/)
 
-    assert.ok(controller.update([{ action: 'delete', item_id: 'T4' }]).ok)
+    assert.ok(controller.update([{ action: 'delete', item_id: 'T2' }]).ok)
     assert.deepEqual(commit(controller)?.plan.items.map(item => item.status), ['completed', 'completed', 'pending'])
+  })
+
+  it('插入和删除按提交后的顺序编号，同批编辑始终指向调用前的项', () => {
+    const controller = activeController()
+    controller.update([{ action: 'edit', item_id: 'T2', status: 'in_progress' }])
+    commit(controller)
+    const changed = controller.update([
+      { action: 'add', outcome: '兼容旧配置', after_item_id: 'T1', status: 'in_progress' },
+      { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['调用方已通过集成测试'] },
+    ])
+    assert.equal(changed.message, [
+      '已在 T1 后新增 T2「兼容旧配置」（进行中）。',
+      '已完成 T3「相关调用方已经统一」，进度 1/4。进行中：T2「兼容旧配置」。',
+    ].join('\n'))
+    const saved = commit(controller)!.state
+    assert.deepEqual(saved.activePlan!.items[2]!.evidence, ['调用方已通过集成测试'])
+    const restored = new TaskPlanController(saved)
+    const removed = restored.update([{ action: 'delete', item_id: 'T2' }])
+    assert.match(removed.message, /已删除原 T2「兼容旧配置」，进度 1\/3/)
+    commit(restored)
+    assert.match(restored.update([{ action: 'delete', item_id: 'T2' }]).message, /T2 已完成/)
+    assert.equal(restored.close().message, '计划已按要求结束，已完成 1/3。')
   })
 
   it('状态和结构在同一次提交中校验，失败时不泄漏部分修改', () => {
@@ -184,7 +214,7 @@ describe('Main 长任务计划控制器', () => {
     const created = controller.create('新任务', drafts)
     const update = commit(controller)!
     assert.ok(created.ok)
-    assert.match(created.message, /^已建立 3 项宏观计划/)
+    assert.match(created.message, /^已建立计划「新任务」，进度 0\/3。/)
     assert.doesNotMatch(created.message, /替换|覆盖|旧计划/)
     assert.equal(update.plan.goal, '新任务')
     assert.notEqual(update.plan.id, previous.activePlan!.id)
