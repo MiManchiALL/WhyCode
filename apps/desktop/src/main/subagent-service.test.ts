@@ -107,7 +107,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
 
     const request = JSON.stringify(fixture.modelCalls[0])
     assert.match(request, /子代理身份：explore/)
-    assert.match(request, /CreateTaskPlan/)
+    assert.ok(fixture.modelCalls[0]?.tools?.some(tool => tool.name === 'TaskPlan'))
     assert.match(request, /ReadFile/)
     assert.doesNotMatch(request, /AskUserQuestion/)
     assert.doesNotMatch(request, /RunCommand/)

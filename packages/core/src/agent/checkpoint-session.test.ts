@@ -22,9 +22,7 @@ import { applySkillContext } from '../skills/context.ts'
 import { visibleCoreEventSchema } from '../session/view-events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
-import {
-  CREATE_TASK_PLAN_TOOL_NAME,
-} from '../tasks/tools.ts'
+import { TASK_PLAN_TOOL_NAME } from '../tasks/tools.ts'
 import {
   activeTaskPlanSchema,
   type TaskPlanState,
@@ -371,7 +369,8 @@ function modelSwitchingAndWriting(path: string): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: [
       toolStep('ListDir', { path: '.', limit: 20 }, 'scan-project'),
-      toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
+      toolStep(TASK_PLAN_TOOL_NAME, {
+        action: 'create',
         goal: '开发 CSGO 游戏',
         items: [
           { kind: 'work', outcome: 'CSGO 核心玩法已经可运行' },

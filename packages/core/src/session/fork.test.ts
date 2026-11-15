@@ -319,8 +319,8 @@ describe('SessionStore Fork', () => {
         {
           type: 'tool-call',
           toolCallId: 'finish-tool',
-          toolName: 'CloseTaskPlan',
-          input: {},
+          toolName: 'TaskPlan',
+          input: { action: 'close' },
         },
       ],
     }])

@@ -1,10 +1,7 @@
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
 import { isProjectInstructionsMessage } from '../instructions/project.ts'
-import {
-  CLOSE_TASK_PLAN_TOOL_NAME, CREATE_TASK_PLAN_TOOL_NAME,
-  UPDATE_TASK_ITEM_TOOL_NAME,
-} from '../tasks/tools.ts'
+import { TASK_PLAN_TOOL_NAME } from '../tasks/tools.ts'
 import { subagentDefinitionSnapshotSchema, type SubagentDefinitionCatalogSnapshot } from './types.ts'
 
 const entrySchema = subagentDefinitionSnapshotSchema.pick({ name: true, description: true })
@@ -52,10 +49,7 @@ function catalogEntries(snapshot: SubagentDefinitionCatalogSnapshot): CatalogEnt
   return snapshot.definitions.map(definition => ({
     name: definition.name,
     description: definition.description,
-    Tools: [
-      ...definition.toolNames,
-      CREATE_TASK_PLAN_TOOL_NAME, UPDATE_TASK_ITEM_TOOL_NAME, CLOSE_TASK_PLAN_TOOL_NAME,
-    ],
+    Tools: [...definition.toolNames, TASK_PLAN_TOOL_NAME],
   })).sort((left, right) => left.name.localeCompare(right.name))
 }
 

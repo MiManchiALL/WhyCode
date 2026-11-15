@@ -154,7 +154,7 @@ System 只包含会话内稳定内容：
 
 消息顺序为：按 Main 相同规则投影的稳定消息快照、BBTW 侧历史（BTW 为空）、当前侧输入及其 `<whycode-btw version="1">` 内部 user 提醒。提醒是宿主状态，不是新的用户要求；工具续轮沿用原提醒，BBTW 重建每轮输入时保留提醒原位，再追加新输入与提醒。Skill 目录继续参与前缀投影，活动正文仍遵循根任务生命周期。停止轮次在原输入及提醒、已提交工具步骤和可用回复片段后追加与 Main 相同的中断标记。
 
-允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind、Present，名单与提示词共用 `packages/core/src/prompts/btw.ts`。侧对话的 ReadFile 只读取文本，媒体附件不经侧对话工具步骤导入。其它工具在独占步骤、审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型；允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
+允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind、Present，名单与提示词共用 `packages/core/src/prompts/btw.ts`。侧对话的 ReadFile 只读取文本，媒体附件不经侧对话工具步骤导入。其它工具在审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型。允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
 
 BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnIndex` 和 `mode`，以新的 canonical 输入身份替换旧输入并移除其后旧回复；编辑重发不增加侧链轮次。输出使用普通推理、正文和工具事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。响应中的 `toolSteps` 只保存中间工具步骤的 canonical messages、推理耗时、失败调用 ID 与可选 PDF 元数据；Provider metadata 随消息保留，不另存一份展示事件。PDF 元数据必须属于该会话，Fork 时重定位，最终正文不重复写入工具步骤。
 
@@ -479,9 +479,11 @@ P 的摘要输入包含 U 完整原文、同一正式 turn 的旧 P（如有）�
 
 ### 5.2 工具和转换
 
-- `CreateTaskPlan` 在独占步骤建立 3～7 个里程碑。各项默认 pending，可在创建时指定 in_progress。已有活动计划时直接替换，成功结果只返回新计划，校验失败保留原计划。
-- `UpdateTaskItem` 通过 `changes` 一次增删、修订、重排或更新多项状态。整批的 `item_id` 和 `after_item_id` 均引用调用开始时的编号，提交后按新顺序编号。未完成项可调整，已完成项和证据只读。开始一项需显式设为 in_progress，完成该项时提交可核验的 evidence。其余项沿用各自的状态。
-- `CloseTaskPlan` 在计划整体不再适用或用户明确放弃时调用，无参数，独占步骤。全部计划项完成时，最后一次更新自动将计划记为 completed 并清空 activePlan。显式关闭记为 ended。
+`TaskPlan` 通过 `action` 选择操作，可与其它工具在同一模型步骤调用。计划变更按调用顺序逐次提交。
+
+- `create` 用 `goal` 和 `items` 建立 3～7 个里程碑。各项默认 pending，可在创建时指定 in_progress。已有活动计划时直接替换，成功结果只返回新计划，校验失败保留原计划。
+- `update` 通过 `changes` 一次增删、修订、重排或更新多项状态。整批的 `item_id` 和 `after_item_id` 均引用调用开始时的编号，提交后按新顺序编号。已完成项只读。开始一项需显式设为 in_progress，完成该项时提交可核验的 evidence。其余项沿用各自的状态。全部计划项完成时，最后一次更新自动将计划记为 completed 并清空 activePlan。
+- `close` 只传 `action`，在计划整体不再适用或用户明确放弃时提前结束计划，记为 ended。
 
 一次更新只提交一个修订，任一变更无效则保留原状态。活动计划内重复设置相同状态和证据不会增加 revision 或 version。未完成的计划跨回合保留，停止、普通答复、提问和异步唤醒均可继续更新同一份计划。
 

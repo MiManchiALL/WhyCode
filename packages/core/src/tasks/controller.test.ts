@@ -185,13 +185,13 @@ describe('Main 长任务计划控制器', () => {
     assert.deepEqual(controller.stateSnapshot, update.state)
   })
 
-  it('结束旧计划与创建新计划必须跨稳定步骤', () => {
+  it('关闭计划的变更提交后才能创建新计划', () => {
     const controller = activeController()
 
     assert.equal(controller.close().ok, true)
-    const sameStep = controller.create('新目标', drafts)
-    assert.equal(sameStep.ok, false)
-    assert.equal(sameStep.ok ? null : sameStep.error, 'step_conflict')
+    const beforeCommit = controller.create('新目标', drafts)
+    assert.equal(beforeCommit.ok, false)
+    assert.equal(beforeCommit.ok ? null : beforeCommit.error, 'step_conflict')
     commit(controller)
 
     assert.equal(controller.create('新目标', drafts).ok, true)

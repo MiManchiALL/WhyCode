@@ -3,11 +3,7 @@
  * 静态段禁止时间戳/随机数（缓存卫生）；动态信息走 <system-reminder> 注入消息流。
  */
 
-import {
-  CLOSE_TASK_PLAN_TOOL_NAME,
-  CREATE_TASK_PLAN_TOOL_NAME,
-  UPDATE_TASK_ITEM_TOOL_NAME,
-} from '../tasks/tools.ts'
+import { TASK_PLAN_TOOL_NAME } from '../tasks/tools.ts'
 import { MANAGE_COMMAND_TOOL_NAME } from '../tools/background-command/constants.ts'
 import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import type { CustomSystemPromptSnapshot } from './custom-system.ts'
@@ -130,10 +126,10 @@ function safetySection(): string {
 function taskPlanningSection(): string {
   return [
     '# 任务计划',
-    `- 处理复杂任务时，先探索现状，理清整体结构和关键约束，再用 ${CREATE_TASK_PLAN_TOOL_NAME} 建立 3～7 个结果导向的里程碑，最后一项用于整体验证。`,
-    '- 开始执行时将对应计划项设为 in_progress，多项可以同时进行。达到预期结果后设为 completed，并逐项附上真实、可核验的完成证据。已完成项及其证据不可修改。',
-    `- 已有计划仅需局部调整时，优先使用 ${UPDATE_TASK_ITEM_TOOL_NAME}。根据实际进展和新发现补充遗漏项，修订或删除不再适用的未完成项，必要时调整顺序，使计划与实际工作一致。`,
-    `- 任务计划跨回合保留，以最新用户要求为准。暂停或等待时保留未完成项。全部计划项完成时，计划自动关闭，无需调用 ${CLOSE_TASK_PLAN_TOOL_NAME}。当前计划整体已不再适用，或用户明确放弃时，用该工具结束计划。`,
+    `- 处理复杂任务时，先探索现状，理清整体结构和关键约束，再用 ${TASK_PLAN_TOOL_NAME} 的 create 操作建立 3～7 个结果导向的里程碑，最后一项用于整体验证。`,
+    '- 开始执行时将对应计划项设为 in_progress，多项可以同时进行。达到预期结果后设为 completed，并逐项附上真实、可核验的完成证据。已完成项只读。',
+    '- 已有计划仅需局部调整时，优先使用 update。根据实际进展和新发现补充遗漏项，修订或删除不再适用的未完成项，必要时调整顺序，使计划与实际工作一致。',
+    '- 任务计划跨回合保留，以最新用户要求为准。暂停或等待时保留未完成项。全部计划项完成时，计划自动关闭，无需调用 close。当前计划整体已不再适用，或用户明确放弃时，用 close 提前结束计划。',
   ].join('\n')
 }
 

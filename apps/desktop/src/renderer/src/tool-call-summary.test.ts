@@ -46,13 +46,13 @@ describe('工具卡片关键参数摘要', () => {
     ['ReadFile', { path: 'guide.pdf', pages: '3-6' }, 'guide.pdf · pages 3–6'],
     ['ReadFile', { path: 'attachment://22222222-2222-4222-8222-222222222222', pages: '21-40' }, 'attachment 22222222… · pages 21–40'],
     ['AskUserQuestion', { questions: [{ question: '保留还是替换？' }, { question: '是否推送？' }] }, '2 questions'],
-    ['CreateTaskPlan', { goal: '完成工具摘要优化', items: [{}, {}, {}] }, '3 milestones'],
-    ['UpdateTaskItem', { changes: [
+    ['TaskPlan', { action: 'create', goal: '完成工具摘要优化', items: [{}, {}, {}] }, 'create · 3 milestones'],
+    ['TaskPlan', { action: 'update', changes: [
       { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['验收通过'] },
       { action: 'edit', item_id: 'T3', status: 'in_progress' },
       { action: 'add', outcome: '新发现得到验证' },
-    ] }, 'T2 → complete · T3 → in progress · 1 plan change'],
-    ['CloseTaskPlan', {}, ''],
+    ] }, 'update · T2 → complete · T3 → in progress · 1 plan change'],
+    ['TaskPlan', { action: 'close' }, 'close'],
     ['Subagent', { action: 'spawn', name: 'explore', description: '检查工具摘要', prompt: 'hidden' }, 'spawn · explore'],
     ['Subagent', { action: 'send', subagent_id: '12345678-1234-4234-8234-123456789abc', prompt: '继续核对测试' }, 'send · 12345678…'],
     ['Subagent', { action: 'stop', subagent_id: '12345678-1234-4234-8234-123456789abc' }, 'stop · 12345678…'],

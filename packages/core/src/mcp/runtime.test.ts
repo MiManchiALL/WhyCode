@@ -85,7 +85,6 @@ describe('MCP 延迟工具检索', () => {
       const first = await runtime.beginStep([], signal)
       const firstTools = first.toolDefinitions()
       assert.deepEqual(firstTools.map((tool) => tool.name), [MCP_TOOL_SEARCH_NAME])
-      assert.equal(firstTools[0]?.requiresStandaloneStep, false)
 
       const search = firstTools[0]!
       const searchSchema = z.toJSONSchema(search.inputSchema as z.ZodType)

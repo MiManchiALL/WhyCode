@@ -102,10 +102,8 @@ function knownToolSummary(
       return arrayCount(input, 'files', 'file', 'files')
     case 'AskUserQuestion':
       return arrayCount(input, 'questions', 'question', 'questions')
-    case 'CreateTaskPlan':
-      return arrayCount(input, 'items', 'milestone', 'milestones')
-    case 'UpdateTaskItem':
-      return taskUpdateSummary(input)
+    case 'TaskPlan':
+      return taskPlanSummary(input)
     case 'Subagent':
       return parts(text(input, 'action'), text(input, 'name') || shortId(text(input, 'subagent_id')))
     case 'ToolSearch':
@@ -252,7 +250,10 @@ function subagentDetails(input: ToolInput, result: string | undefined): string {
   ].join('\n')
 }
 
-function taskUpdateSummary(input: ToolInput): ToolCallSummary {
+function taskPlanSummary(input: ToolInput): ToolCallSummary {
+  const action = fixed(text(input, 'action'))
+  if (input.action === 'create') return parts(action, arrayCount(input, 'items', 'milestone', 'milestones'))
+  if (input.action !== 'update') return parts(action)
   const changes = Array.isArray(input.changes) ? input.changes : []
   const transitions: string[] = []
   for (const change of changes) {
@@ -261,7 +262,7 @@ function taskUpdateSummary(input: ToolInput): ToolCallSummary {
     const status = edit.status === 'in_progress' ? 'in progress' : edit.status === 'completed' ? 'complete' : ''
     if (status) transitions.push(joinWith(' → ', text(edit, 'item_id'), status))
   }
-  return parts(...transitions, fixed(count(changes.length - transitions.length, 'plan change', 'plan changes')))
+  return parts(action, ...transitions, fixed(count(changes.length - transitions.length, 'plan change', 'plan changes')))
 }
 
 function protocolSummary(input: ToolInput): string | ToolCallSummary {
