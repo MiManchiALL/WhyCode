@@ -1,4 +1,5 @@
 import type { CoreEvent } from '@whycode/core/events'
+import { isSessionActivityEvent } from '../shared/session.ts'
 
 /**
  * 未选中且未在恢复的运行时只需推动会话列表的生命周期状态。其完整时间线已有 Main
@@ -11,17 +12,7 @@ export function shouldDeliverRuntimeEvent(
   resumingSessionId: string | null,
 ): boolean {
   // 恢复请求先接通实时流，再读取快照；否则快照游标到提交选择之间会丢失正文。
-  if (runtime === selected || (runtime.sessionId !== null && runtime.sessionId === resumingSessionId)) return true
-  switch (event.type) {
-    case 'work-started':
-    case 'work-discarded':
-    case 'turn-start':
-    case 'work-finished':
-    case 'turn-end':
-      return true
-    case 'agent-status':
-      return event.status === 'idle' || event.status === 'error'
-    default:
-      return false
-  }
+  return runtime === selected
+    || (runtime.sessionId !== null && runtime.sessionId === resumingSessionId)
+    || isSessionActivityEvent(event)
 }

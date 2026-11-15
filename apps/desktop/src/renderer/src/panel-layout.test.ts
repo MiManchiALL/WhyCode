@@ -24,7 +24,7 @@ describe('两侧栏宽度', () => {
     assert.equal(parsePanelWidth('left', '600'), 360)
     assert.equal(parsePanelWidth('right', '0.28'), 0.28)
     assert.equal(parsePanelWidth('right', '0.12'), 0.2)
-    assert.equal(parsePanelWidth('right', '0.9'), 0.5)
+    assert.equal(parsePanelWidth('right', '0.9'), 0.55)
   })
 
   it('分别保存全局宽度；缩窄窗口不会改写用户偏好', (context) => {
@@ -42,31 +42,31 @@ describe('两侧栏宽度', () => {
       },
     })
     persistPanelWidth('left', 340)
-    persistPanelWidth('right', 0.28)
+    persistPanelWidth('right', 0.53)
     assert.deepEqual(panelWidthBounds({ ...geometry(800, 240, 126), side: 'left' }), {
       minWidth: 240, maxWidth: 240,
     })
     assert.equal(loadPanelWidth('left'), 340)
-    assert.equal(loadPanelWidth('right'), 0.28)
+    assert.equal(loadPanelWidth('right'), 0.53)
   })
 
-  it('扩大右侧上限时由左侧让出空间，反向扩展左侧也保持原对话宽度', () => {
-    const original = geometry(1_920, 360, 864)
-    assert.equal(minimumConversationWidth(original), 682)
+  it('宽窗口中两栏展开时右侧可达 55%，反向拉宽左侧可恢复阅读布局', () => {
+    const original = geometry(1_920, 360, 960)
+    assert.equal(minimumConversationWidth(original), 586)
     assert.deepEqual(panelWidthBounds({ ...original, side: 'left' }), {
       minWidth: 240, maxWidth: 360,
     })
     const right = panelWidthBounds({ ...original, side: 'right' })
     assert.equal(right.minWidth, 384)
-    assert.equal(right.maxWidth, 960)
-    assert.deepEqual(resize(original, 'right', 960).widths, { left: 264, right: 960 })
-    assert.deepEqual(resize(geometry(1_920, 264, 960), 'left', 360).widths, { left: 360, right: 864 })
-    assert.deepEqual(resize(original, 'right', 900).widths, { left: 324, right: 900 })
-    assert.deepEqual(resize(original, 'right', 850).widths, { left: 360, right: 850 })
+    assert.equal(right.maxWidth, 1_056)
+    assert.deepEqual(resize(original, 'right', 1_056), { widths: { left: 264, right: 1_056 }, open: original.open })
+    assert.deepEqual(resize(geometry(1_920, 264, 1_056), 'left', 360).widths, { left: 360, right: 960 })
+    assert.deepEqual(resize(original, 'right', 1_000).widths, { left: 320, right: 1_000 })
+    assert.deepEqual(resize(original, 'right', 900).widths, { left: 360, right: 900 })
   })
 
   it('另一侧到达最小宽度后仍保留收起缓冲，原本收起的侧栏不被拖拽重新展开', () => {
-    assert.deepEqual(resize(geometry(2_560, 360, 1_152), 'right', 1_280).widths, { left: 240, right: 1_272 })
+    assert.deepEqual(resize(geometry(2_560, 360, 1_280), 'right', 1_408).widths, { left: 240, right: 1_400 })
     const leftClosed = { ...geometry(1_920, 62, 864), open: { left: false, right: true } }
     assert.deepEqual(resize(leftClosed, 'right', 960), { widths: { left: 62, right: 960 }, open: leftClosed.open })
     const rightClosed = { ...geometry(1_920, 260, 360), open: { left: true, right: false } }
@@ -78,7 +78,7 @@ describe('两侧栏宽度', () => {
     assert.deepEqual(resize(start, 'right', 397), { widths: { left: 240, right: 326 }, open: start.open })
     const closed = resize(start, 'right', 398)
     assert.deepEqual(closed, { widths: { left: 62, right: 398 }, open: { left: false, right: true } })
-    assert.deepEqual(resize(start, 'right', 600, closed.open).widths, { left: 62, right: 500 })
+    assert.deepEqual(resize(start, 'right', 600, closed.open).widths, { left: 62, right: 504 })
     assert.equal(resize(start, 'right', 327, closed.open).open.left, false)
     const reopened = resize(start, 'right', 326, closed.open)
     assert.deepEqual(reopened, { widths: { left: 240, right: 326 }, open: start.open })
@@ -113,7 +113,7 @@ describe('两侧栏宽度', () => {
   })
 
   it('自身已达上限或收起不能释放空间时，不收起另一侧', () => {
-    const wide = geometry(1_920, 264, 960)
+    const wide = geometry(1_920, 264, 1_056)
     assert.deepEqual(resize(wide, 'right', 1_200), { widths: wide.widths, open: wide.open })
     const noSpace = { ...geometry(1_000, 300, 266), collapsedWidths: { left: 240, right: 0 } }
     assert.equal(resize(noSpace, 'right', 500).open.left, true)
@@ -137,7 +137,7 @@ describe('两侧栏宽度', () => {
     assert.equal(minimumConversationWidth(geometry(500, 150, 0)), 336)
     for (const viewport of [800, 1_024, 1_200, 1_440, 1_920, 2_560]) {
       const input = geometry(viewport, Math.min(360, viewport * 0.3), 0)
-      const initialRight = Math.min(viewport * 0.45, input.layoutWidth - input.widths.left - minimumConversationWidth(input))
+      const initialRight = Math.min(viewport * 0.5, input.layoutWidth - input.widths.left - minimumConversationWidth(input))
       input.widths.right = initialRight
       for (const side of ['left', 'right'] as const) {
         const result = resize(input, side, viewport).widths
