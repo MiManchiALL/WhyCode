@@ -21,7 +21,7 @@ import { AgentSession } from './session.ts'
 
 describe('Main 长任务端到端控制', () => {
   it('按操作校验计划参数，更新项时校验状态和完成证据', async () => {
-    const tool = createTaskPlanTool(new TaskPlanController())
+    const tool = createTaskPlanTool(new TaskPlanController(), () => undefined)
     for (const input of [
       {}, { action: 'create' }, { action: 'update' }, { action: 'close', goal: '其它目标' },
       { action: 'update', goal: '其它目标', changes: [{ action: 'delete', item_id: 'T1' }] },
@@ -114,6 +114,24 @@ describe('Main 长任务端到端控制', () => {
     const results = model.doGenerateCalls[0]!.prompt.flatMap(message => message.role === 'tool' ? message.content : [])
       .filter(part => part.type === 'tool-result')
     assert.deepEqual(results.map(part => part.output), [error.output, { type: 'text', value: receipts[1]!.result }])
+  })
+
+  it('创建失败后，模型可在下一步骤更新原活动计划', async () => {
+    const model = modelWithSteps([
+      toolStep(TASK_PLAN_TOOL_NAME, { action: 'create', goal: '新目标', items: [] }),
+      toolStep(TASK_PLAN_TOOL_NAME, { action: 'update', changes: [
+        { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['原计划第一项验证通过'] },
+      ] }),
+      finalStep('原计划进度已更新。'),
+    ])
+    const { session } = createSession(model)
+    const original = activePlan()
+    session.restoreTaskStateSnapshot({ version: original.revision, activePlan: original })
+    assert.equal(await session.handleUserMessage('核对计划'), 'completed')
+    const plan = session.captureTaskStateSnapshot()?.activePlan
+    assert.equal(plan?.id, original.id)
+    assert.equal(plan?.items[0]?.status, 'completed')
+    assert.deepEqual(plan?.items[0]?.evidence, ['原计划第一项验证通过'])
   })
 
   it('最终正文与后续普通问答保留未完成计划', async () => {

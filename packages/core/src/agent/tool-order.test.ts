@@ -11,6 +11,7 @@ import type { ModelEntry } from '../providers/registry.ts'
 import { parseTranscript } from '../session/chain.ts'
 import { SessionStore } from '../session/store.ts'
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '../session/tool-execution.ts'
+import { TASK_PLAN_TOOL_NAME } from '../tasks/tools.ts'
 import { buildTool } from '../tools/tool.ts'
 import { createCommandTools, CommandSessionManager } from '../tools/background-command/index.ts'
 import { localWorkspace } from '../workspace/types.ts'
@@ -18,6 +19,60 @@ import { AgentSession, type ApprovalHandler } from './session.ts'
 
 // 串行用例各自限时，避免前面的耗时挤占后续用例的等待预算。
 describe('工具调用顺序与执行屏障', () => {
+  const planItems = [
+    { kind: 'work', outcome: '实现功能', status: 'in_progress' },
+    { kind: 'work', outcome: '核对调用方' },
+    { kind: 'verification', outcome: '完成验证' },
+  ]
+  const completeFirst = { action: 'update', changes: [
+    { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['新计划的验证记录'] },
+  ] }
+
+  for (const [reason, invalidCreate] of [
+    ['参数缺失', { action: 'create', goal: '新计划' }],
+    ['JSON 不完整', '{"action":"create","goal":"新计划","items":'],
+    ['缺少最终验证项', { action: 'create', goal: '新计划', items: planItems.map(item => ({ ...item, kind: 'work' })) }],
+  ] as const) {
+    it(`计划创建失败（${reason}）时，同一步的更新和关闭保留原计划，独立读取照常执行`, async t => {
+      const events: CoreEvent[] = []
+      const f = await setup(t, [
+        [TASK_PLAN_TOOL_NAME, { action: 'create', goal: '原计划', items: planItems }],
+        [TASK_PLAN_TOOL_NAME, invalidCreate],
+        [TASK_PLAN_TOOL_NAME, completeFirst],
+        ['ListDir', { path: '.' }],
+        [TASK_PLAN_TOOL_NAME, { action: 'close' }],
+      ], event => events.push(event))
+      assert.equal(await f.session.handleUserMessage('创建并更新新计划'), 'completed')
+      const reopened = await f.store.open(f.journal.sessionId)
+      const results = toolResults(reopened.initialMessages)
+      assert.deepEqual(results.map(part => part.output.type), ['text', 'error-text', 'error-text', 'text', 'error-text'])
+      for (const index of [2, 4]) {
+        const { output } = results[index]!
+        assert.equal(output.type, 'error-text')
+        assert.match(output.value, /目标计划/)
+      }
+      const updates = events.filter(event => event.type === 'task-plan-updated')
+      assert.equal(updates.length, 1)
+      assert.equal(updates[0]!.plan.goal, '原计划')
+      assert.deepEqual(reopened.initialTaskState, { version: 1, activePlan: updates[0]!.plan })
+      assert.deepEqual(f.session.captureTaskStateSnapshot(), reopened.initialTaskState)
+    })
+  }
+
+  it('同一步可重新创建计划，更新参数出错后仍可继续更新该计划', async t => {
+    const f = await setup(t, [
+      [TASK_PLAN_TOOL_NAME, { action: 'create', goal: '未建成', items: [] }],
+      [TASK_PLAN_TOOL_NAME, { action: 'create', goal: '新计划', items: planItems }],
+      [TASK_PLAN_TOOL_NAME, { action: 'update', changes: [] }],
+      [TASK_PLAN_TOOL_NAME, completeFirst],
+    ])
+    assert.equal(await f.session.handleUserMessage('更正创建并记录进度'), 'completed')
+    const reopened = await f.store.open(f.journal.sessionId)
+    assert.deepEqual(toolResults(reopened.initialMessages).map(part => part.output.type), ['error-text', 'text', 'error-text', 'text'])
+    assert.equal(reopened.initialTaskState?.activePlan?.goal, '新计划')
+    assert.deepEqual(reopened.initialTaskState?.activePlan?.items[0]?.evidence, ['新计划的验证记录'])
+  })
+
   it('同一 ManageCommand 的查询可并发，写入、EOF 和停止按调用顺序形成屏障', { timeout: 15_000 }, async t => {
     const taskId = crypto.randomUUID()
     const firstReads = [deferred(t), deferred(t)]
@@ -243,7 +298,7 @@ describe('工具调用顺序与执行屏障', () => {
   })
 })
 
-type Call = [string, unknown]
+type Call = [toolName: string, input: Record<string, unknown> | string]
 
 async function setup(
   t: TestContext, calls: Call[], emit: (event: CoreEvent) => void = () => {},
@@ -257,7 +312,10 @@ async function setup(
   const journal = await store.create({ workspace: localWorkspace(projectDir), modelId: 'test:order' })
   const model = new MockLanguageModelV4({ doStream: [
     { stream: simulateReadableStream({ chunks: [
-      ...calls.map(([toolName, input], index) => ({ type: 'tool-call' as const, toolCallId: `call-${index + 1}`, toolName, input: JSON.stringify(input) })),
+      ...calls.map(([toolName, input], index) => ({
+        type: 'tool-call' as const, toolCallId: `call-${index + 1}`, toolName,
+        input: typeof input === 'string' ? input : JSON.stringify(input),
+      })),
       { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage },
     ] }) },
     { stream: simulateReadableStream({ chunks: [

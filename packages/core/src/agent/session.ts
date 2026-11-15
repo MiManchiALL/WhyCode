@@ -112,7 +112,7 @@ import {
   readModelStream,
   withModelRequestRetry,
 } from '../providers/model-request.ts'
-import { createTaskPlanTool } from '../tasks/tools.ts'
+import { createTaskPlanTool, taskPlanCallTargets } from '../tasks/tools.ts'
 import type { TaskPlanState } from '../tasks/types.ts'
 import { taskPlanViewBeforeTurn } from '../session/task-plan-view.ts'
 import {
@@ -198,6 +198,7 @@ interface ToolStepContext {
   loopHealth: LoopHealthMonitor
   onToolExecutionStart?: (toolCallId: string) => Promise<void>
   onToolExecutionEnd?: (event: ToolEndEvent) => Promise<string>
+  taskPlanTargets?: ReadonlyMap<string, string>
   allowedToolNames?: ReadonlySet<string>
   /** 侧对话保留原有的文本文件读取边界，不创建视觉工具附件。 */
   textOnlyFileReads?: boolean
@@ -1862,7 +1863,7 @@ export class AgentSession {
             stopReason = 'waiting-user'
             break
           }
-          if (this.taskPlan?.hasActivePlan && this.options.hasPendingCommandWake?.(turnId)) stopReason = 'paused'
+          if (this.taskPlan?.activePlanId && this.options.hasPendingCommandWake?.(turnId)) stopReason = 'paused'
           finishedNaturally = true
           break
         }
@@ -2599,6 +2600,9 @@ export class AgentSession {
         )
         appendOrderedMessages(this.messages, head)
         this.updateLastTurnAssistantText(canonicalResponseMessages)
+        if (this.taskPlan) {
+          toolContext.taskPlanTargets = taskPlanCallTargets(canonicalResponseMessages, this.taskPlan.activePlanId)
+        }
         toolExecution = new ToolExecutionBatch({
           messages: canonicalResponseMessages,
           abort: stepAbort,
@@ -2700,7 +2704,7 @@ export class AgentSession {
     const taskTool = this.taskPlan
       && !this.options.promptContext.discussion
       && !this.protocolRound
-      ? createTaskPlanTool(this.taskPlan)
+      ? createTaskPlanTool(this.taskPlan, id => context.taskPlanTargets?.get(id))
       : undefined
     const questionTools: ToolDefinition[] =
       this.userQuestionsEnabled
