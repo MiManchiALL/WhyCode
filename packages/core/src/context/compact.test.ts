@@ -11,7 +11,6 @@ import { compactMessages, type CompactOptions } from './compact.ts'
 import { prepareCompaction, pickBudgetStart } from './compact-boundary.ts'
 import { compactTailBudget } from './tokens.ts'
 import { userTurn, withUserTurn } from './user-turn.ts'
-import { compactionConversation } from './compact-context.ts'
 
 const capabilities = { contextWindow: 128_000, maxOutput: 20_000 }
 const tail = { role: 'assistant' as const, content: 'TAIL_ONLY_' + 'x'.repeat(75_000) }
@@ -187,7 +186,7 @@ describe('全量摘要输入与手动压缩', () => {
     assert.deepEqual(output.messages.slice(1), [marker])
   })
 
-  it('剥离可重建的规范、计划快照，但保留 Skill 独有资料、错误和操作结果', async () => {
+  it('摘要排除可重建的上下文，保留 Skill 参考资料、失败原因和用户引用的原文', async () => {
     const messages: ModelMessage[] = [root('A'),
       createCompactApplicationContextMessage(['旧计划全文']),
       { role: 'user', content: '<system-reminder>\n<whycode-task-progress version="1">\n旧进度提醒\n</whycode-task-progress>\n</system-reminder>' },
@@ -195,22 +194,17 @@ describe('全量摘要输入与手动压缩', () => {
       call('reference', 'Skill', { skillId: 'example', resourcePath: 'references/api-details.md' }),
       result('reference', '独有 API 参考资料', 'Skill'),
       call('failed', 'Skill', { skillId: 'missing' }),
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'failed', toolName: 'Skill', output: { type: 'error-text', value: '资源不存在' } }] },
-      call('plan', 'UpdateTaskItem', { changes: [{ action: 'edit', item_id: 'T1', status: 'completed', evidence: ['验证完成'] }] }),
-      result('plan', '<whycode-task-result schema-version="1">\n{"ok":true,"message":"验证完成"}\n</whycode-task-result>\n<whycode-task-state schema-version="1">\n整份计划\n</whycode-task-state>', 'UpdateTaskItem'),
-      call('missing-item', 'UpdateTaskItem', { changes: [{ action: 'delete', item_id: 'T9' }] }),
-      result('missing-item', '<whycode-task-result schema-version="1">\n{"ok":false,"error":"item_not_found","message":"任务项不存在：T9"}\n</whycode-task-result>\n<whycode-task-state schema-version="1">\n失败附带的旧计划\n</whycode-task-state>', 'UpdateTaskItem', 'error-text'),
+      result('failed', '资源不存在', 'Skill', 'error-text'),
+      withUserTurn(createCompactApplicationContextMessage(['用户引用的计划格式']), 'B', true),
       assistant('阶段完成'),
     ]
     const model = summaryModel(['摘要'])
     await compact(model, messages, { mode: 'manual' })
     const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt)
-    assert.doesNotMatch(prompt, /旧计划全文|旧进度提醒|SKILL_BODY_UNIQUE|整份计划|失败附带的旧计划/)
-    assert.match(prompt, /item_not_found/)
-    assert.match(prompt, /任务项不存在：T9/)
-    assert.match(prompt, /独有 API 参考资料/); assert.match(prompt, /资源不存在/); assert.match(prompt, /验证完成/)
-    const quotedRule = root('B', '<system-reminder>\n<whycode-task-state schema-version="1">\n请修改此格式')
-    assert.deepEqual(compactionConversation([quotedRule]), [quotedRule])
+    assert.doesNotMatch(prompt, /旧计划全文|旧进度提醒|SKILL_BODY_UNIQUE/)
+    assert.match(prompt, /独有 API 参考资料/)
+    assert.match(prompt, /资源不存在/)
+    assert.match(prompt, /用户引用的计划格式/)
   })
 
   it('摘要返回工具调用时拒绝结果，不触发工具执行或输入回调', async () => {
