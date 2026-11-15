@@ -90,8 +90,8 @@ describe('Main 长任务端到端控制', () => {
     assert.deepEqual(session.captureTaskStateSnapshot(), { version: 3, activePlan: null })
   })
 
-  it('更新无效编号只返回错误与可用编号，提前关闭只返回已完成进度', async () => {
-    const model = modelWithSteps([
+  it('无效编号与提前关闭的回执原样进入模型请求和压缩历史', async () => {
+    const model = compactingModel([
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, { changes: [{ action: 'delete', item_id: 'T9' }] }),
       toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {}),
       finalStep('已结束旧计划。'),
@@ -107,6 +107,11 @@ describe('Main 长任务端到端控制', () => {
     assert.deepEqual(receipts.map(event => [event.isError, event.result]),
       [[true, expectedError], [false, '计划已按要求结束，已完成 0/3。']])
     assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
+
+    await session.compactNow()
+    const results = model.doGenerateCalls[0]!.prompt.flatMap(message => message.role === 'tool' ? message.content : [])
+      .filter(part => part.type === 'tool-result')
+    assert.deepEqual(results.map(part => part.output), [error.output, { type: 'text', value: receipts[1]!.result }])
   })
 
   it('最终正文与后续普通问答保留未完成计划', async () => {
