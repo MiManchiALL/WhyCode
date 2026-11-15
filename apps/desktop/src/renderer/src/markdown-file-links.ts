@@ -18,7 +18,7 @@ export function markdownFileTarget(url: string): MarkdownFileTarget | null {
   } catch {
     return null
   }
-  if (/^[\\/]{2}|[\\/]$|[\u0000-\u001f\u007f]/u.test(path)
+  if (/^[\\/]{2}|[\u0000-\u001f\u007f]/u.test(path)
     || /^[a-z][a-z\d+.-]*:/iu.test(path) && !/^[a-z]:[\\/]/iu.test(path)) return null
   const line = Number(location?.[1])
   if (!Number.isSafeInteger(line) || line < 1) return { path }

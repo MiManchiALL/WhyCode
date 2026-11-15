@@ -434,6 +434,20 @@ it('目录展开与文件显示偏好按会话保存，打开同一文件保留�
   assert.deepEqual(restored.get('a').tabs[0]?.page, { kind: 'workspace', expanded: ['src', 'src/main'] })
 })
 
+it('目录链接复用目录标签，重开同一目录保留展开项，也能从当前工作路径返回根目录', () => {
+  const folder = { kind: 'workspace' as const, directory: 'src/ui', expanded: [] }
+  let state = openRightPanelPage(emptyState(), folder)
+  const expanded = { ...folder, expanded: ['src/ui/components'] }
+  state = updateRightPanelPage(state, expanded)
+  state = openRightPanelPage(state, folder)
+  const storage = new MemoryStorage()
+  new RightPanelSessionStore(storage).set('session', state)
+  assert.deepEqual(activeRightPanelPage(new RightPanelSessionStore(storage).get('session')), expanded)
+  state = openRightPanelPage(state, { kind: 'workspace', expanded: [] })
+  assert.equal(state.tabs.length, 1)
+  assert.deepEqual(activeRightPanelPage(state), { kind: 'workspace', expanded: [] })
+})
+
 it('工具与交付入口显式选择代码和预览，仍复用同一文件标签及换行偏好', () => {
   const page = { kind: 'file', path: 'C:/repo/index.html', name: 'index.html', source: { kind: 'current' } } as const
   let state = openRightPanelPage(emptyState(), { ...page, wrap: true, previewMode: 'preview' })

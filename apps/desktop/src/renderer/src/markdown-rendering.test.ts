@@ -124,7 +124,7 @@ describe('Markdown 渲染', () => {
       + '[入口](src/main.ts:24:3) [说明](<C:/工作/test%231.md#L7-L12>) [日志](notes.md) '
       + '[行尾](./notes%3A24) [无效行](./app.ts#L0) [范围](./app.ts:31-35)'
     for (const streaming of [true, false]) {
-      const doc = renderedDocument(source, streaming, true)
+      const doc = renderedDocument(source, streaming)
       const links = [...doc.querySelectorAll('a[data-file-path]')]
       assert.equal(links[0]?.textContent, '实验对照')
       assert.deepEqual(links.map(link => [link.getAttribute('data-file-path'), link.getAttribute('data-file-line')]), [
@@ -133,23 +133,31 @@ describe('Markdown 渲染', () => {
       ])
       assert.deepEqual(links.map(link => link.getAttribute('data-file-end-line')), [null, null, '12', null, null, null, '35'])
     }
-    const definition = renderedDocument('[报告][r]\n\n[r]: <./目录/报告.md#L3>', false, true)
+    const definition = renderedDocument('[报告][r]\n\n[r]: <./目录/报告.md#L3>', false)
     assert.equal(definition.querySelector('[data-file-path]')?.getAttribute('data-file-line'), '3')
-    assert.equal(renderedDocument(source, false).querySelector('[data-file-path]'), null)
+  })
+  it('裸目录与显式相对目录在流式和定稿时都保留链接文字和原始目标', () => {
+    const source = '[**源码目录**](Coyote/) [同级](./hw/) [上级](../) [项目](</srv/my project/>)'
+    for (const streaming of [true, false]) {
+      const doc = renderedDocument(source, streaming)
+      assert.equal(doc.body.textContent, '源码目录 同级 上级 项目')
+      assert.deepEqual([...doc.querySelectorAll('a[data-file-path]')].map(link => link.getAttribute('data-file-path')),
+        ['Coyote/', './hw/', '../', '/srv/my project/'])
+    }
   })
   it('文件入口只接受完整的 Markdown 文件链接，保持网页、来源和 HTML 的既有语义', () => {
     const source = [
       '[网页](https://example.com/report.md#L2) [来源](https://example.com "whycode:source")',
-      '[站点](//example.com/a.md) [锚](#L3) [脚本](javascript:24) [协议](file:///c:/a.md)',
+      '[站点](//example.com/a/) [锚](#L3) [脚本](javascript:24) [协议](file:///c:/a/) [首页](https://example.com/)',
       '`[示例](./a.ts:3)` <a href="#workspace-file" data-file-path="/a.ts">HTML</a>',
     ].join('\n\n')
     for (const streaming of [true, false]) {
-      const doc = renderedDocument(source, streaming, true)
+      const doc = renderedDocument(source, streaming)
       assert.equal(doc.querySelector('[data-file-path]'), null)
       assert.equal(doc.querySelector('a')?.getAttribute('href'), 'https://example.com/report.md#L2')
       assert.equal(doc.querySelector('[data-source-citation-url]')?.textContent, '来源')
     }
-    const incomplete = renderedDocument('[入口](./src/main.ts#L', true, true)
+    const incomplete = renderedDocument('[入口](./src/main.ts#L', true)
     assert.equal(incomplete.body.textContent, '入口')
     assert.equal(incomplete.querySelector('a'), null)
   })
@@ -433,12 +441,12 @@ $Y_u$ 为 $3 \times 3$ 的复矩阵。`
   })
 })
 
-function renderedDocument(source: string, streaming: boolean, fileLinks = false) {
-  const html = renderedHtml(source, streaming, !streaming, fileLinks)
+function renderedDocument(source: string, streaming: boolean) {
+  const html = renderedHtml(source, streaming, !streaming)
   return parseHTML(`<!doctype html><html><body>${html}</body></html>`).document
 }
 
-function renderedHtml(source: string, streaming: boolean, renderMath: boolean, fileLinks = false) {
+function renderedHtml(source: string, streaming: boolean, renderMath: boolean) {
   const renderedSource = renderMath ? normalizeMathDelimiters(source) : source
   return renderToStaticMarkup(createElement(
     Streamdown,
@@ -446,7 +454,7 @@ function renderedHtml(source: string, streaming: boolean, renderMath: boolean, f
       mode: streaming ? 'streaming' : 'static',
       plugins: markdownPluginsFor(renderMath),
       remend: MARKDOWN_REMEND_OPTIONS,
-      remarkPlugins: markdownRemarkPlugins(streaming, fileLinks),
+      remarkPlugins: markdownRemarkPlugins(streaming),
       rehypePlugins: MARKDOWN_REHYPE_PLUGINS,
       linkSafety: { enabled: false },
     },

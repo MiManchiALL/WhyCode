@@ -149,6 +149,21 @@ describe('目录标签的数据所有权', () => {
     tree.close()
   })
 
+  it('从链接切入子目录只保留显示中的目录，返回根目录时释放子目录监听', async () => {
+    const api = fixture()
+    const tree = new WorkspaceDirectories(api, 'a', '0')
+    await tree.get('').refresh()
+    const folder = tree.get('src/ui')
+    await folder.refresh()
+    tree.retain([], 'src/ui')
+    assert.deepEqual([...api.views.values()].map(view => view.path), ['src/ui'])
+    await tree.get('').refresh()
+    tree.retain([])
+    assert.equal(folder.getSnapshot().view, null)
+    assert.deepEqual([...api.views.values()].map(view => view.path), [''])
+    tree.close()
+  })
+
   it('首批完成后可立即继续恢复下一页，已删除目录的整个子树释放监听', async () => {
     const api = fixture()
     api.entries = ['A/', ...Array.from({ length: 399 }, (_, i) => `file-${i}.txt`)]

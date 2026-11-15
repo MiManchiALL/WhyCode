@@ -1186,11 +1186,11 @@ export function App() {
     void showRightPanelPage({ kind: 'compaction', index })
   }, [showRightPanelPage])
 
-  const openFilePreview = useCallback((
-    page: Extract<RightPanelPage, { kind: 'file' }>,
+  const openPathPreview = useCallback((
+    page: Extract<RightPanelPage, { kind: 'file' | 'workspace' }>,
   ) => {
     // 同一路径复用标签时页面身份不会变化；点击文件名仍应成为一次显式重检。
-    setFilePreviewInteractionRevision((current) => current + 1)
+    if (page.kind === 'file') setFilePreviewInteractionRevision((current) => current + 1)
     showRightPanelPage(page)
   }, [showRightPanelPage])
 
@@ -1925,8 +1925,7 @@ export function App() {
     const targetRuntimeId = runtimeIdRef.current
     if (!targetRuntimeId) return
     if (workspace.mode === 'ssh') {
-      const page = rightPanelStateRef.current.tabs.find(tab => tab.page.kind === 'workspace')?.page
-      showRightPanelPage(page ?? { kind: 'workspace', expanded: [] })
+      showRightPanelPage({ kind: 'workspace', expanded: [] })
       return
     }
     void window.whycode.openWorkspaceFolder(targetRuntimeId).then((result) => {
@@ -2426,7 +2425,7 @@ export function App() {
                   ref={conversationContentRef}
                   className="wc-conversation-content wc-conversation-balanced-content mx-auto w-full max-w-4xl"
                 >
-                  <MarkdownNavigation baseDir={projectDir} onOpenFile={openFilePreview}>
+                  <MarkdownNavigation baseDir={projectDir} onNavigate={openPathPreview}>
                     <ConversationView
                       remote={workspace.mode === 'ssh'}
                       runtimeId={runtimeId}
@@ -2459,7 +2458,7 @@ export function App() {
                       onNavigate={navigateConversation}
                       onEdit={editUserMessage}
                       onFork={forkConversation}
-                      onOpenFilePreview={openFilePreview}
+                      onOpenFilePreview={openPathPreview}
                       onOpenChanges={showRightPanelPage}
                       onOpenCompaction={openCompactionSummary}
                       onToggle={toggle}

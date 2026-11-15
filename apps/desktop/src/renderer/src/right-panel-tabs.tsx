@@ -133,7 +133,7 @@ function TabLabel({ tab, title, status }: { tab: RightPanelTab; title: string; s
 
 function tabTitle(tab: RightPanelTab, subagents: readonly SubagentSummary[]): string {
   const page = tab.page
-  if (page.kind === 'workspace') return '当前工作路径'
+  if (page.kind === 'workspace') return page.directory?.split('/').at(-1) || '当前工作路径'
   if (page.kind === 'changes') return '本轮改动'
   if (page.kind === 'compaction') return '压缩摘要'
   if (page.kind === 'git') return '变更'

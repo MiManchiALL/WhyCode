@@ -77,12 +77,13 @@ export function RightPanel(props: RightPanelProps) {
   const comments = useMemo(() => props.codeReview?.items.filter(item => item.comment) ?? [], [props.codeReview?.items])
   const workspacePage = props.state.tabs.find(tab => tab.page.kind === 'workspace')?.page
   const expanded = workspacePage?.kind === 'workspace' ? workspacePage.expanded : undefined
+  const directory = workspacePage?.kind === 'workspace' ? workspacePage.directory : undefined
   const hasWorkspace = expanded !== undefined
   const directories = useMemo(() => new WorkspaceDirectories(window.whycode, props.runtimeId, props.refreshRevision),
     [props.runtimeId, props.workspacePath, hasWorkspace])
   const browsing = !props.loading && props.active && activeRightPanelPage(props.state)?.kind === 'workspace'
   useEffect(() => () => directories.close(), [directories])
-  useEffect(() => directories.retain(expanded ?? []), [directories, expanded])
+  useEffect(() => directories.retain(expanded ?? [], directory), [directories, expanded, directory])
   useEffect(() => directories.setActive(browsing, Boolean(props.remote)), [directories, browsing, props.remote])
   useEffect(() => directories.setRevision(props.refreshRevision), [directories, props.refreshRevision])
   useEffect(() => {
@@ -177,18 +178,18 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
         : <div className="min-h-0 flex-1" />
     case 'workspace':
       return props.active && props.workspacePath ? <WorkspaceBrowser
-        key={`${props.runtimeId}:${props.workspacePath}`}
+        key={`${props.runtimeId}:${props.workspacePath}:${page.directory ?? ''}`}
         runtimeId={props.runtimeId} canReferencePath={props.canReferencePath} onReferencePath={props.onReferencePath}
-        directories={props.directories} rootPath={props.workspacePath} expanded={page.expanded}
+        directories={props.directories} rootPath={props.workspacePath} directory={page.directory ?? ''} expanded={page.expanded}
         position={props.workspacePosition} onPositionChange={props.onWorkspacePositionChange}
-        onExpandedChange={expanded => props.onOpenPage({ ...page, expanded })}
+        onExpandedChange={expanded => props.onUpdatePage({ ...page, expanded })}
         onOpenFile={(path, name) => props.onOpenPage({ kind: 'file', path, name, source: { kind: 'current' } })}
       /> : <div className="min-h-0 flex-1" />
     case 'terminal':
       return <TerminalPanel key={page.terminal.id} terminal={page.terminal} active={props.active} />
     case 'file':
       return props.active ? (
-        <MarkdownNavigation baseDir={resolveWorkspaceFilePath('..', page.path)} onOpenFile={props.onOpenPage}>
+        <MarkdownNavigation baseDir={resolveWorkspaceFilePath('..', page.path)} workspaceDir={props.workspacePath} onNavigate={props.onOpenPage}>
           <RightPanelFilePreview
             key={filePageKey(props.runtimeId, page)}
             runtimeId={props.runtimeId}
@@ -203,7 +204,7 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
     case 'subagent-overview':
     case 'subagent-transcript':
       return (
-        <MarkdownNavigation baseDir={props.projectDir} onOpenFile={props.onOpenPage}>
+        <MarkdownNavigation baseDir={props.projectDir} onNavigate={props.onOpenPage}>
           <SubagentPanelContent
             active={props.active}
             runtimeId={props.runtimeId}
@@ -232,8 +233,7 @@ function filePageKey(
 }
 
 function openWorkspace(props: RightPanelProps): void {
-  const existing = props.state.tabs.find(tab => tab.page.kind === 'workspace')
-  props.onOpenPage(existing?.page ?? { kind: 'workspace', expanded: [] })
+  props.onOpenPage({ kind: 'workspace', expanded: [] })
 }
 
 function openBrowser(props: RightPanelProps): void {

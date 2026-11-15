@@ -31,9 +31,9 @@ export class WorkspaceDirectories {
     return level
   }
 
-  retain(expanded: readonly string[]): void {
+  retain(expanded: readonly string[], directory = ''): void {
     for (const [path, level] of this.levels) {
-      if (path !== '' && !expanded.includes(path)) { this.levels.delete(path); level.close() }
+      if (path !== directory && !expanded.includes(path)) { this.levels.delete(path); level.close() }
     }
   }
 
