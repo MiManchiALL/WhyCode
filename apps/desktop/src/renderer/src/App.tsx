@@ -32,12 +32,13 @@ import {
   type QueuedUserMessage,
   type ToolFileChange,
 } from '@whycode/core/events'
-import type {
-  RuntimeEventEnvelope,
-  RuntimeSnapshot,
-  SessionListItem,
-  DeleteSessionOptions,
-  DeleteSessionResult,
+import {
+  isSessionActivityEvent,
+  type RuntimeEventEnvelope,
+  type RuntimeSnapshot,
+  type SessionListItem,
+  type DeleteSessionOptions,
+  type DeleteSessionResult,
 } from '../../shared/session.ts'
 import type { ModelListItem } from '../../shared/settings.ts'
 import { attachmentFallbackText } from '../../shared/user-message.ts'
@@ -994,7 +995,6 @@ export function App() {
     switch (event.type) {
       case 'work-started':
         setWorkStartedAt(event.startedAt)
-        void refreshSessions()
         break
       case 'user-question':
       case 'user-question-resolved':
@@ -1002,17 +1002,13 @@ export function App() {
         break
       case 'turn-start':
         setCurrentFileChanges([])
-        // 后台唤醒先进入 work，再在回合起点写稳会话活动时间；这里确认最近顺序。
-        void refreshSessions()
         break
       case 'work-finished':
         setWorkStartedAt(null)
         setGitStatusRevision((revision) => revision + 1)
-        void refreshSessions()
         break
       case 'work-discarded':
         setWorkStartedAt(null)
-        void refreshSessions()
         break
       case 'tool-end':
         setGitStatusRevision((revision) => revision + 1)
@@ -1020,12 +1016,7 @@ export function App() {
       case 'agent-status':
         setStatus(event.status)
         if (event.status !== 'waiting-approval') setApproval(null)
-        if (event.status === 'idle' || event.status === 'error') {
-          setStopping(false)
-          // work-finished 在 Main 中先于权威终态发布；再读一次列表，避免首次快照
-          // 恰好仍观察到 busy 而让侧栏运行标记滞留。
-          void refreshSessions()
-        }
+        if (event.status === 'idle' || event.status === 'error') setStopping(false)
         if (event.status === 'idle') setNegoStatus(null)
         break
       case 'turn-file-changes':
@@ -1033,7 +1024,6 @@ export function App() {
         break
       case 'turn-end':
         setCurrentFileChanges([])
-        void refreshSessions()
         break
       case 'active-skills-changed':
         setActiveSkills(event.skills)
@@ -1328,20 +1318,12 @@ export function App() {
         setComposerSessionId(eventSessionId)
         consumeEvent(event, occurredAt)
       } else if (
-        event.type === 'work-started'
-        || event.type === 'user-question' || event.type === 'user-question-resolved'
+        event.type === 'user-question' || event.type === 'user-question-resolved'
         || (event.type === 'message-queued' && !!event.questionIds) || event.type === 'queued-message-edit-ready' || event.type === 'message-dequeued'
-        || event.type === 'work-discarded'
-        || event.type === 'turn-start'
-        || event.type === 'work-finished'
-        || event.type === 'turn-end'
-        || (
-          event.type === 'agent-status'
-          && (event.status === 'idle' || event.status === 'error')
-        )
       ) {
         void refreshSessions()
       }
+      if (isSessionActivityEvent(event)) void refreshSessions()
       if (
         eventRuntimeId !== runtimeIdRef.current
         || hydratingRuntimeIdRef.current === eventRuntimeId

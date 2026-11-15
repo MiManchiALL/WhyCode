@@ -40,6 +40,24 @@ export type SessionListItem = DesktopSessionSummary & {
   hasUnreadCompletion: boolean
 }
 
+/** 会话列表按这些生命周期事件重新读取宿主的运行状态和活动时间。 */
+export function isSessionActivityEvent(event: CoreEvent): boolean {
+  switch (event.type) {
+    case 'work-started':
+    case 'work-discarded':
+    case 'turn-start':
+    case 'work-finished':
+    case 'turn-end':
+      return true
+    case 'context-compaction':
+      return event.status === 'running'
+    case 'agent-status':
+      return event.status === 'idle' || event.status === 'error'
+    default:
+      return false
+  }
+}
+
 export interface SetSessionPinnedRequest {
   sessionId: string
   pinned: boolean

@@ -16,7 +16,7 @@ export const PANEL_CLOSE_OVERSHOOT = 72
 // 会话列表保存像素宽度，文件侧栏保存窗口比例；响应式限宽不改写偏好。
 export const PANEL_WIDTHS = {
   left: { minimum: 240, maximum: 360, default: 260, viewportLimit: 0.3, storageKey: 'whycode:session-sidebar-width:v1' },
-  right: { minimum: 0.2, maximum: 0.5, default: 0.36, storageKey: 'whycode:right-panel-width-ratio:v1' },
+  right: { minimum: 0.2, maximum: 0.55, default: 0.36, storageKey: 'whycode:right-panel-width-ratio:v1' },
 } as const
 
 export interface PanelWidthBounds {
@@ -70,9 +70,9 @@ export function minimumConversationWidth(input: Pick<PanelGeometry, 'viewportWid
   const viewportWidth = finiteNonNegative(input.viewportWidth)
   const available = finiteNonNegative(input.layoutWidth)
   const left = intrinsicPanelBounds('left', viewportWidth, true)
-  // 保留左侧 360px、右侧 45% 的阅读基线；新增侧栏空间由两侧互相让出。
+  // 左侧取最大宽度、右侧占一半窗口时的正文宽度作为阅读下限。
   return Math.min(Math.max(0, available - left.minWidth),
-    Math.max(MIN_CONVERSATION_WIDTH, available - left.maxWidth - viewportWidth * 0.45))
+    Math.max(MIN_CONVERSATION_WIDTH, available - left.maxWidth - viewportWidth * 0.5))
 }
 
 export function panelWidthBounds(input: PanelGeometry & { side: PanelSide }): PanelWidthBounds {
