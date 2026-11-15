@@ -116,7 +116,7 @@ describe('BTW 独立侧对话', () => {
     assert.deepEqual(model.doStreamCalls[0]?.tools, model.doStreamCalls[1]?.tools)
   })
 
-  it('越界工具在审批和独占步骤之前失败，结果交回模型且不影响只读工具和后续 Main', async () => {
+  it('越界工具在审批之前失败，结果交回模型且不影响只读工具和后续 Main', async () => {
     for (const mode of ['default', 'auto'] as const) {
       const executed: string[] = []
       const events: CoreEvent[] = []
@@ -144,7 +144,7 @@ describe('BTW 独立侧对话', () => {
         extraTools: [buildTool({
           name: 'BlockedControl', description: '受限控制工具', prompt: '受限控制工具',
           inputSchema: z.object({}), kind: 'control', isReadOnly: false,
-          requiresStandaloneStep: true, endsTurnOnSuccess: true,
+          endsTurnOnSuccess: true,
           execute: async () => {
             executed.push('BlockedControl')
             return { data: '已执行', isError: false }

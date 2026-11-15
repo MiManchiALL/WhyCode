@@ -131,8 +131,8 @@ describe('会话界面时间线重建', () => {
     state = applyCoreEvent(state, {
       type: 'tool-start',
       toolUseId: 'close-plan',
-      toolName: 'CloseTaskPlan',
-      input: {},
+      toolName: 'TaskPlan',
+      input: { action: 'close' },
     })
     state = applyCoreEvent(state, {
       type: 'tool-end',
@@ -504,15 +504,15 @@ describe('会话界面时间线重建', () => {
     state = applyCoreEvent(state, {
       type: 'tool-start',
       toolUseId: 'close-plan-id',
-      toolName: 'CloseTaskPlan',
-      input: {},
+      toolName: 'TaskPlan',
+      input: { action: 'close' },
     })
     state = applyCoreEvent(state, {
       type: 'tool-end', toolUseId: 'close-plan-id', isError: false, result: '计划已按要求结束，已完成 1/3。',
     })
     const tool = state.blocks.find((block) => block.kind === 'tool')
     assert.ok(tool?.kind === 'tool')
-    assert.deepEqual(tool.call.input, {})
+    assert.deepEqual(tool.call.input, { action: 'close' })
     assert.equal(tool.call.result, '计划已按要求结束，已完成 1/3。')
   })
 

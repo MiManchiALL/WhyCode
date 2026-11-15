@@ -2,9 +2,7 @@ import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
 import type { TaskMutationResult, TaskPlanController } from './controller.ts'
 
-export const CREATE_TASK_PLAN_TOOL_NAME = 'CreateTaskPlan'
-export const UPDATE_TASK_ITEM_TOOL_NAME = 'UpdateTaskItem'
-export const CLOSE_TASK_PLAN_TOOL_NAME = 'CloseTaskPlan'
+export const TASK_PLAN_TOOL_NAME = 'TaskPlan'
 
 const initialStatus = z.enum(['pending', 'in_progress']).optional()
 const itemId = z.string().regex(/^T\d+$/)
@@ -46,6 +44,20 @@ const itemChangeSchema = z.discriminatedUnion('action', [
 export type TaskPlanDraftItem = z.infer<typeof draftSchema>
 export type TaskPlanItemChange = z.infer<typeof itemChangeSchema>
 
+const inputSchema = z.strictObject({
+  action: z.enum(['create', 'update', 'close']),
+  goal: z.string().min(1).optional().describe('create 必填，整个任务最终要达到的可验证结果'),
+  items: z.array(draftSchema).min(3).max(7).optional().describe('create 必填，3～7 个宏观里程碑'),
+  changes: z.array(itemChangeSchema).min(1).max(14).optional().describe('update 必填，本次的计划项变更'),
+}).superRefine((input, ctx) => {
+  for (const key of ['goal', 'items', 'changes'] as const) {
+    const required = key === 'changes' ? input.action === 'update' : input.action === 'create'
+    if (required !== (input[key] !== undefined)) {
+      ctx.addIssue({ code: 'custom', path: [key], message: `${input.action} ${required ? '需要' : '不接受'} ${key}` })
+    }
+  }
+})
+
 function toolResult(result: TaskMutationResult) {
   return {
     data: result.ok ? result.message : `${result.error}：${result.message}`,
@@ -53,50 +65,24 @@ function toolResult(result: TaskMutationResult) {
   }
 }
 
-export function createTaskPlanTools(controller: TaskPlanController): ToolDefinition[] {
-  return [
-    buildTool({
-      name: CREATE_TASK_PLAN_TOOL_NAME,
-      description: '为复杂目标建立宏观任务计划',
-      prompt:
-        '创建 3～7 个结果导向的里程碑，最后一项为整体验证（verification）。建议在建计划时就将接下来要做的项设为 in_progress，可同时指定多项，其余默认 pending。已有活动计划时直接替换。本工具独占一个模型步骤。',
-      inputSchema: z.object({
-        goal: z.string().min(1).describe('整个任务最终要达到的可验证结果'),
-        items: z.array(draftSchema).min(3).max(7).describe('3～7 个宏观里程碑'),
-      }).strict(),
-      isReadOnly: false,
-      kind: 'control',
-      requiresStandaloneStep: true,
-      async execute(input) {
-        return toolResult(controller.create(input.goal, input.items))
-      },
-    }),
-    buildTool({
-      name: UPDATE_TASK_ITEM_TOOL_NAME,
-      description: '调整计划项及其进度',
-      prompt:
-        '用 changes 一次更新一项或多项。T1、T2 等按位置编号，整批引用调用开始时的编号，提交后按新顺序编号。add 新增计划项，edit 修改未完成项的结果、顺序或状态，delete 删除未完成项。开始执行时设为 in_progress，达到预期结果后设为 completed 并为该项提供可核验的 evidence。已完成项及其证据不可修改。',
-      inputSchema: z.object({
-        changes: z.array(itemChangeSchema).min(1).max(14),
-      }).strict(),
-      isReadOnly: false,
-      kind: 'control',
-      async execute(input) {
-        return toolResult(controller.update(input.changes))
-      },
-    }),
-    buildTool({
-      name: CLOSE_TASK_PLAN_TOOL_NAME,
-      description: '显式结束当前活动计划',
-      prompt:
-        `当前计划整体已不再适用，或用户明确放弃时调用。局部调整用 ${UPDATE_TASK_ITEM_TOOL_NAME}，暂时等待时保留计划。无参数，独占一个模型步骤。`,
-      inputSchema: z.object({}).strict(),
-      isReadOnly: false,
-      kind: 'control',
-      requiresStandaloneStep: true,
-      async execute() {
-        return toolResult(controller.close())
-      },
-    }),
-  ]
+export function createTaskPlanTool(controller: TaskPlanController): ToolDefinition {
+  return buildTool({
+    name: TASK_PLAN_TOOL_NAME,
+    description: '创建、更新或结束当前任务计划',
+    prompt: [
+      'action=create 用 goal 和 items 创建 3～7 个结果导向的里程碑，最后一项为整体验证（verification）。建议在建计划时就将接下来要做的项设为 in_progress，可同时指定多项，其余默认 pending。已有活动计划时直接替换。',
+      'action=update 用 changes 一次更新一项或多项。T1、T2 等按位置编号，整批引用调用开始时的编号，提交后按新顺序编号。add 新增计划项，edit 修改未完成项的结果、顺序或状态，delete 删除未完成项。开始执行时设为 in_progress，达到预期结果后设为 completed 并为该项提供可核验的 evidence。已完成项只读。',
+      'action=close 只填 action。当前计划整体已不再适用，或用户明确放弃时调用。局部调整用 update，暂时等待时保留计划。',
+    ].join('\n'),
+    inputSchema,
+    isReadOnly: false,
+    kind: 'control',
+    async execute(input) {
+      switch (input.action) {
+        case 'create': return toolResult(controller.create(input.goal!, input.items!))
+        case 'update': return toolResult(controller.update(input.changes!))
+        case 'close': return toolResult(controller.close())
+      }
+    },
+  })
 }

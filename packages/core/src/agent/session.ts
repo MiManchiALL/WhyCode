@@ -112,7 +112,7 @@ import {
   readModelStream,
   withModelRequestRetry,
 } from '../providers/model-request.ts'
-import { createTaskPlanTools } from '../tasks/tools.ts'
+import { createTaskPlanTool } from '../tasks/tools.ts'
 import type { TaskPlanState } from '../tasks/types.ts'
 import { taskPlanViewBeforeTurn } from '../session/task-plan-view.ts'
 import {
@@ -2697,11 +2697,11 @@ export class AgentSession {
   ): StepToolSet | undefined {
     const model = this.currentModelSelection().model
     const extraTools = this.options.extraTools ?? []
-    const taskTools = this.taskPlan
+    const taskTool = this.taskPlan
       && !this.options.promptContext.discussion
       && !this.protocolRound
-      ? createTaskPlanTools(this.taskPlan)
-      : []
+      ? createTaskPlanTool(this.taskPlan)
+      : undefined
     const questionTools: ToolDefinition[] =
       this.userQuestionsEnabled
       && !this.options.promptContext.discussion
@@ -2725,7 +2725,7 @@ export class AgentSession {
       : []
     const controlTools: ToolDefinition[] = [
       ...extraTools,
-      ...taskTools,
+      ...(taskTool ? [taskTool] : []),
       ...questionTools,
       ...skillTools,
       ...mainTools,
@@ -2768,7 +2768,7 @@ export class AgentSession {
     ]
     const subagentTools = this.options.promptContext.subagent?.toolNames
     const availableDefs = subagentTools
-      ? defs.filter((def) => subagentTools.includes(def.name) || taskTools.includes(def))
+      ? defs.filter((def) => subagentTools.includes(def.name) || def === taskTool)
       : defs
     return this.wrapToolDefinitions(availableDefs, abortSignal, context)
   }
@@ -2789,19 +2789,6 @@ export class AgentSession {
       applySuggestion: (suggestion) => this.applySuggestion(suggestion),
     })
     const toolSet: StepToolSet = {}
-    let firstStepToolName: string | null = null
-    let standaloneStepToolName: string | null = null
-    const claimStepTool = (def: ToolDefinition): string | null => {
-      if (standaloneStepToolName) {
-        return `${standaloneStepToolName} 必须独占一个模型步骤；请在下一模型步骤再调用 ${def.name}。`
-      }
-      if (def.requiresStandaloneStep && firstStepToolName) {
-        return `${def.name} 必须独占一个模型步骤，但本步骤已经调用 ${firstStepToolName}；请在下一模型步骤单独调用 ${def.name}。`
-      }
-      firstStepToolName ??= def.name
-      if (def.requiresStandaloneStep) standaloneStepToolName = def.name
-      return null
-    }
     for (const def of defs) {
       const finishTool = (toolCallId: string, result: string, isError: boolean, fileChanges?: ToolFileChange[]): Promise<string> => {
         const event: ToolEndEvent = {
@@ -2816,6 +2803,11 @@ export class AgentSession {
         input: unknown,
         toolCallId: string,
       ): Promise<PreparedToolCall> => {
+        if (allowedToolNames && !allowedToolNames.has(def.name)) {
+          const msg = `临时对话不允许使用 ${def.name}，未执行。请使用允许的只读工具或依据已有上下文回答。`
+          loopHealth.record(def.name, input, msg, true)
+          return { isReadOnly: false, execute: () => finishTool(toolCallId, msg, true) }
+        }
         if (abortSignal.aborted) return { isReadOnly: false, execute: () => finishTool(toolCallId, TOOL_NOT_STARTED, true) }
         // additionalDirs 会在审批中变化，每次调用取最新
         let toolCtx: ToolContext = {
@@ -3026,22 +3018,8 @@ export class AgentSession {
             : executeAuthorized(),
         }
       }
-      const prepareWithStepGate = async (
-        input: unknown,
-        toolCallId: string,
-      ): Promise<PreparedToolCall> => {
-        const deniedByMode = allowedToolNames && !allowedToolNames.has(def.name)
-        const conflict = deniedByMode
-          ? `临时对话不允许使用 ${def.name}，未执行。请使用允许的只读工具或依据已有上下文回答。`
-          : claimStepTool(def)
-        if (conflict) {
-          loopHealth.record(def.name, input, conflict, true)
-          return { isReadOnly: false, execute: () => finishTool(toolCallId, conflict, true) }
-        }
-        return prepareTool(input, toolCallId)
-      }
       toolSet[def.name] = {
-        prepare: prepareWithStepGate,
+        prepare: prepareTool,
         definition: aiTool({
           description: def.prompt,
           inputSchema: def.inputSchema,

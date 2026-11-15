@@ -52,10 +52,10 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
         for (const name of ['Subagent', 'AskUserQuestion']) {
           assert.equal(names.includes(name), false, name)
         }
-        assert.ok(names.includes('CreateTaskPlan'))
+        assert.ok(names.includes('TaskPlan'))
         const definition = fixture.toolContext('turn', 'call').subagentDefinitions.find(item => item.name === role)!
         const allowed = new Set([
-          ...definition.toolNames, 'CreateTaskPlan', 'UpdateTaskItem', 'CloseTaskPlan',
+          ...definition.toolNames, 'TaskPlan',
         ])
         assert.ok(names.every(name => allowed.has(name)), '实际工具只能收窄目录声明的范围')
         const system = JSON.stringify(fixture.modelCalls[0]!.prompt[0])
@@ -197,7 +197,7 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
     await fixture.waitForSettlements(2)
     const names = fixture.modelCalls.at(-1)!.tools!.map((tool) => tool.name)
     assert.ok(names.includes('ReadFile'))
-    assert.ok(names.includes('CreateTaskPlan'))
+    assert.ok(names.includes('TaskPlan'))
     for (const name of ['CaptureScreenshot', 'WebSearch']) {
       assert.equal(names.includes(name), false, name)
     }

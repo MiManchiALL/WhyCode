@@ -3,7 +3,7 @@ import { userTurn } from '../context/user-turn.ts'
 import { isCompactApplicationContextMessage } from '../prompts/compact.ts'
 import type { ActiveTaskPlan } from './types.ts'
 import { taskItemNumber } from './context.ts'
-import { CREATE_TASK_PLAN_TOOL_NAME, UPDATE_TASK_ITEM_TOOL_NAME } from './tools.ts'
+import { TASK_PLAN_TOOL_NAME } from './tools.ts'
 
 const REMINDER_STEPS = 10
 const PROGRESS_OPEN = '<whycode-task-progress version="1">'
@@ -24,8 +24,7 @@ export function taskProgressReminder(messages: readonly ModelMessage[], plan: Ac
     } else if (isTaskProgressReminder(message) || (isCompactApplicationContextMessage(message) && !userTurn(message))) {
       return null
     } else if (message.role === 'tool' && message.content.some(part =>
-      part.type === 'tool-result' && part.output.type === 'text'
-      && (part.toolName === CREATE_TASK_PLAN_TOOL_NAME || part.toolName === UPDATE_TASK_ITEM_TOOL_NAME)
+      part.type === 'tool-result' && part.toolName === TASK_PLAN_TOOL_NAME && part.output.type === 'text'
     )) {
       return null
     }

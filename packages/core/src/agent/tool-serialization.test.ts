@@ -5,6 +5,7 @@ import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
+import { TASK_PLAN_TOOL_NAME } from '../tasks/tools.ts'
 import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
@@ -46,60 +47,43 @@ describe('工具副作用串行', () => {
     assert.deepEqual(order, ['start-1', 'end-1', 'start-2', 'end-2'])
   })
 
-  it('独占步骤工具与其它调用不能在同一模型响应中共同执行', async () => {
-    for (const order of [
-      ['StandaloneProbe', 'NormalProbe'],
-      ['NormalProbe', 'StandaloneProbe'],
-    ]) {
-      const runs: string[] = []
-      const events: CoreEvent[] = []
-      const standalone = buildTool({
-        name: 'StandaloneProbe',
-        description: '独占步骤探针',
-        prompt: '必须独占步骤',
-        inputSchema: z.object({}),
-        isReadOnly: false,
-        kind: 'control',
-        requiresStandaloneStep: true,
-        async execute() {
-          runs.push('standalone')
-          return { data: 'standalone-ok', isError: false }
-        },
-      })
-      const normal = buildTool({
-        name: 'NormalProbe',
-        description: '普通探针',
-        prompt: '普通工具',
-        inputSchema: z.object({}),
-        isReadOnly: false,
-        kind: 'control',
-        async execute() {
-          runs.push('normal')
-          return { data: 'normal-ok', isError: false }
-        },
-      })
-      const model = new MockLanguageModelV4({
-        doStream: [namedToolStep(order), finalStep()],
-      })
-      const session = new AgentSession({
-        model: modelEntry(model),
-        providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
-        emit: (event) => events.push(event),
-        requestApproval: async () => ({ approved: false }),
-      })
-      session.setExtraTools([standalone, normal])
+  it('同一模型步骤内可交错读取和创建、更新、关闭计划，每次变更按序提交', async () => {
+    const read = { toolName: 'ListDir', input: { path: '.', limit: 1 } }
+    const calls = [
+      read,
+      { toolName: TASK_PLAN_TOOL_NAME, input: { action: 'create', goal: '检查目录', items: [
+        { kind: 'work', outcome: '目录已读取', status: 'in_progress' },
+        { kind: 'work', outcome: '清单已核对' },
+        { kind: 'verification', outcome: '结果已验证' },
+      ] } },
+      { toolName: TASK_PLAN_TOOL_NAME, input: { action: 'update', changes: [
+        { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['目录已列出'] },
+      ] } },
+      read,
+      { toolName: TASK_PLAN_TOOL_NAME, input: { action: 'close' } },
+      read,
+    ]
+    const model = new MockLanguageModelV4({ doStream: [toolCallsStep(calls), finalStep()] })
+    const events: CoreEvent[] = []
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
+      emit: event => events.push(event),
+      requestApproval: async () => ({ approved: false }),
+    })
 
-      assert.equal(await session.handleUserMessage('测试独占边界'), 'completed')
-      assert.deepEqual(runs, [order[0] === 'StandaloneProbe' ? 'standalone' : 'normal'])
-      assert.equal(
-        events.some((event) =>
-          event.type === 'tool-end'
-          && event.isError
-          && String(event.result).includes('必须独占一个模型步骤')),
-        true,
-      )
-    }
+    assert.equal(await session.handleUserMessage('核对目录后结束计划'), 'completed')
+    assert.equal(model.doStreamCalls.length, 2)
+    const results = model.doStreamCalls[1]!.prompt.flatMap(message => message.role === 'tool' ? message.content : [])
+      .filter(part => part.type === 'tool-result')
+    assert.deepEqual(results.map(part => [part.toolName, part.output.type]), calls.map(call => [call.toolName, 'text']))
+    assert.deepEqual(results[4]!.output, { type: 'text', value: '计划已按要求结束，已完成 1/3。' })
+    const updates = events.filter(event => event.type === 'task-plan-updated')
+    assert.deepEqual(updates.map(({ plan }) => [plan.status, plan.items[0]!.status]), [
+      ['active', 'in_progress'], ['active', 'completed'], ['ended', 'completed'],
+    ])
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 
   it('同一步的首次隐私审批会合并判定并复用记住的授权', async () => {
@@ -149,7 +133,7 @@ describe('工具副作用串行', () => {
     const first = approvalProbe('BatchApprovalFirst', executions)
     const second = approvalProbe('BatchApprovalSecond', executions)
     const model = new MockLanguageModelV4({
-      doStream: [namedToolStep([first.name, second.name]), finalStep()],
+      doStream: [toolCallsStep([{ toolName: first.name }, { toolName: second.name }]), finalStep()],
     })
     const session = new AgentSession({
       model: modelEntry(model),
@@ -196,7 +180,7 @@ describe('工具副作用串行', () => {
       },
     })
     const model = new MockLanguageModelV4({
-      doStream: [namedToolStep([probe.name]), finalStep()],
+      doStream: [toolCallsStep([{ toolName: probe.name }]), finalStep()],
     })
     let session!: AgentSession
     session = new AgentSession({
@@ -332,7 +316,7 @@ describe('工具副作用串行', () => {
     })
     const model = new MockLanguageModelV4({
       doStream: [
-        namedToolStep(['HostScheduledEdit', 'LocalControl']),
+        toolCallsStep([{ toolName: 'HostScheduledEdit' }, { toolName: 'LocalControl' }]),
         finalStep(),
       ],
     })
@@ -424,15 +408,15 @@ function approvalProbe(name: string, executions: string[]) {
   })
 }
 
-function namedToolStep(toolNames: string[]) {
+function toolCallsStep(calls: { toolName: string; input?: unknown }[]) {
   return {
     stream: simulateReadableStream({
       chunks: [
-        ...toolNames.map((toolName, index) => ({
+        ...calls.map(({ toolName, input }, index) => ({
           type: 'tool-call' as const,
           toolCallId: `mixed-${index}`,
           toolName,
-          input: '{}',
+          input: JSON.stringify(input ?? {}),
         })),
         {
           type: 'finish' as const,

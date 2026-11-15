@@ -29,8 +29,6 @@ export interface ToolDefinition<
   kind: 'read' | 'edit' | 'execute' | 'control'
   /** 多操作工具在参数校验后确定本次调用的权限与并发行为；未提供时使用静态声明。 */
   behavior?: (input: InferSchema<InputSchema>) => ToolBehavior
-  /** 该工具必须独占一次模型步骤。 */
-  requiresStandaloneStep: boolean
   /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
   endsTurnOnSuccess: boolean
   /** 隐私或信任边界首次使用也需审批；会话记住或全自动档仍服从常规硬拒绝。 */
@@ -94,7 +92,6 @@ export interface ToolResult {
 const CONSERVATIVE_DEFAULTS = {
   isReadOnly: false,
   kind: 'execute' as const,
-  requiresStandaloneStep: false,
   endsTurnOnSuccess: false,
 }
 
