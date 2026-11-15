@@ -1,3 +1,4 @@
+import type { ModelMessage } from 'ai'
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
 import type { TaskMutationResult, TaskPlanController } from './controller.ts'
@@ -65,7 +66,31 @@ function toolResult(result: TaskMutationResult) {
   }
 }
 
-export function createTaskPlanTool(controller: TaskPlanController): ToolDefinition {
+/** SDK 可能在执行前拒绝参数，甚至清空无法解析的输入，须按完整响应的调用顺序绑定目标。 */
+export function taskPlanCallTargets(
+  messages: readonly ModelMessage[],
+  activePlanId: string | null,
+): ReadonlyMap<string, string> {
+  const targets = new Map<string, string>()
+  let targetId = activePlanId
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue
+    for (const call of message.content) {
+      if (call.type !== 'tool-call' || call.providerExecuted || call.toolName !== TASK_PLAN_TOOL_NAME) continue
+      const input = call.input
+      const action = typeof input === 'object' && input !== null && 'action' in input ? input.action : undefined
+      if (action === 'create') targetId = crypto.randomUUID()
+      else if (action !== 'update' && action !== 'close') targetId = null
+      if (targetId !== null) targets.set(call.toolCallId, targetId)
+    }
+  }
+  return targets
+}
+
+export function createTaskPlanTool(
+  controller: TaskPlanController,
+  targetForCall: (toolCallId: string) => string | undefined,
+): ToolDefinition {
   return buildTool({
     name: TASK_PLAN_TOOL_NAME,
     description: '创建、更新或结束当前任务计划',
@@ -77,11 +102,12 @@ export function createTaskPlanTool(controller: TaskPlanController): ToolDefiniti
     inputSchema,
     isReadOnly: false,
     kind: 'control',
-    async execute(input) {
+    async execute(input, { toolCallId }) {
+      const target = toolCallId === undefined ? undefined : targetForCall(toolCallId)
       switch (input.action) {
-        case 'create': return toolResult(controller.create(input.goal!, input.items!))
-        case 'update': return toolResult(controller.update(input.changes!))
-        case 'close': return toolResult(controller.close())
+        case 'create': return toolResult(controller.create(input.goal!, input.items!, target))
+        case 'update': return toolResult(controller.update(input.changes!, target ?? null))
+        case 'close': return toolResult(controller.close(target ?? null))
       }
     },
   })

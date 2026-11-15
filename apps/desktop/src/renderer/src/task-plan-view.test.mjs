@@ -5,7 +5,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createServer } from 'vite'
 import { TaskPlanController } from '../../../../../packages/core/src/tasks/controller.ts'
-import { createTaskPlanTool } from '../../../../../packages/core/src/tasks/tools.ts'
+import { createTaskPlanTool, taskPlanCallTargets, TASK_PLAN_TOOL_NAME } from '../../../../../packages/core/src/tasks/tools.ts'
 
 test('工具卡片原样显示回执，侧栏按新顺序编号并标记全部进行中项', async t => {
   const vite = await createServer({
@@ -16,12 +16,16 @@ test('工具卡片原样显示回执，侧栏按新顺序编号并标记全部�
   const { TaskPlanView } = await vite.ssrLoadModule('/task-plan-view.tsx')
   const { BlockView } = await vite.ssrLoadModule('/conversation-block.tsx')
   const controller = new TaskPlanController()
-  const tool = createTaskPlanTool(controller)
   async function run(input) {
-    const result = await tool.execute(input, {})
+    const id = crypto.randomUUID()
+    const targets = taskPlanCallTargets([{ role: 'assistant', content: [
+      { type: 'tool-call', toolName: TASK_PLAN_TOOL_NAME, toolCallId: id, input },
+    ] }], controller.activePlanId)
+    const tool = createTaskPlanTool(controller, callId => targets.get(callId))
+    const result = await tool.execute(input, { toolCallId: id })
     if (result.isError) controller.discardUpdate()
     else controller.commitUpdate()
-    const call = { id: 'plan-tool', name: tool.name, input, status: result.isError ? 'error' : 'done', progress: '', result: result.data }
+    const call = { id, name: tool.name, input, status: result.isError ? 'error' : 'done', progress: '', result: result.data }
     const html = renderToStaticMarkup(createElement(BlockView, { runtimeId: 'session', expanded: true, block: { kind: 'tool', id: call.id, call } }))
     const { document } = parseHTML(html)
     assert.equal(document.querySelector('.wc-tool-summary .font-medium').textContent, 'TaskPlan')

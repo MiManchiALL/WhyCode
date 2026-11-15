@@ -51,8 +51,8 @@ export class TaskPlanController {
     this.state = cloneTaskPlanState(initialState)
   }
 
-  get hasActivePlan(): boolean {
-    return this.state.activePlan !== null
+  get activePlanId(): string | null {
+    return this.state.activePlan?.id ?? null
   }
 
   progressReminder(messages: readonly ModelMessage[]): ModelMessage | null {
@@ -86,15 +86,15 @@ export class TaskPlanController {
     this.pending = undefined
   }
 
-  create(goal: string, drafts: TaskPlanDraftItem[]): TaskMutationResult {
-    const next = this.buildPlan(goal, drafts)
+  create(goal: string, drafts: TaskPlanDraftItem[], planId: string = crypto.randomUUID()): TaskMutationResult {
+    const next = this.buildPlan(goal, drafts, planId)
     if ('error' in next) return mutationFailure('invalid_plan', next.error)
     return this.stage(next.plan, taskPlanSummary(next.plan, '已建立计划'))
   }
 
-  update(changes: readonly TaskPlanItemChange[]): TaskMutationResult {
-    const current = this.state.activePlan
-    if (!current) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
+  update(changes: readonly TaskPlanItemChange[], targetId = this.activePlanId): TaskMutationResult {
+    const current = this.activePlanFor(targetId)
+    if ('error' in current) return current
     if (changes.length === 0) {
       return mutationFailure('no_state_change', '必须提供任务项变化或状态更新。')
     }
@@ -133,10 +133,19 @@ export class TaskPlanController {
     return this.stage(updated, message)
   }
 
-  close(): TaskMutationResult {
+  close(targetId = this.activePlanId): TaskMutationResult {
+    const plan = this.activePlanFor(targetId)
+    if ('error' in plan) return plan
+    return this.stage({ ...plan, revision: plan.revision + 1, status: 'ended' }, `计划已按要求结束，已完成 ${taskProgress(plan)}。`)
+  }
+
+  private activePlanFor(targetId: string | null): ActiveTaskPlan | TaskMutationFailure {
     const plan = this.state.activePlan
     if (!plan) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
-    return this.stage({ ...plan, revision: plan.revision + 1, status: 'ended' }, `计划已按要求结束，已完成 ${taskProgress(plan)}。`)
+    if (plan.id !== targetId) {
+      return mutationFailure('step_conflict', '前序调用未能确定目标计划，已跳过本次操作。')
+    }
+    return plan
   }
 
   private changeItem(
@@ -249,6 +258,7 @@ export class TaskPlanController {
   private buildPlan(
     goal: string,
     drafts: TaskPlanDraftItem[],
+    planId: string,
   ): { plan: ActiveTaskPlan } | { error: string } {
     const normalizedGoal = goal.trim()
     if (!normalizedGoal) return { error: '计划目标不能为空。' }
@@ -271,7 +281,7 @@ export class TaskPlanController {
     if (items.some(item => !item.outcome)) return { error: '里程碑结果描述不能为空。' }
     return {
       plan: activeTaskPlanSchema.parse({
-        id: crypto.randomUUID(),
+        id: planId,
         goal: normalizedGoal,
         status: 'active',
         items,
