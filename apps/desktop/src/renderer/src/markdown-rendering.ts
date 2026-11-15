@@ -24,8 +24,6 @@ const BASE_REMARK_PLUGINS = Object.entries(defaultRemarkPlugins).map(([name, plu
 )
 const STREAMING_REMARK_PLUGINS = [...BASE_REMARK_PLUGINS, remarkResponseLinks]
 const MARKDOWN_REMARK_PLUGINS = [...STREAMING_REMARK_PLUGINS, remarkFrontmatter]
-const STREAMING_FILE_REMARK_PLUGINS: Pluggable[] = [...BASE_REMARK_PLUGINS, [remarkResponseLinks, { files: true }]]
-const FILE_REMARK_PLUGINS = [...STREAMING_FILE_REMARK_PLUGINS, remarkFrontmatter]
 export const MARKDOWN_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeResponseLinks]
 export const MARKDOWN_REMEND_OPTIONS = { linkMode: 'text-only' } as const
 
@@ -55,8 +53,7 @@ export function markdownPluginsFor(renderMath: boolean) {
   return renderMath ? SETTLED_MARKDOWN_PLUGINS : BASE_MARKDOWN_PLUGINS
 }
 
-export function markdownRemarkPlugins(streaming = false, fileLinks = false) {
-  if (fileLinks) return streaming ? STREAMING_FILE_REMARK_PLUGINS : FILE_REMARK_PLUGINS
+export function markdownRemarkPlugins(streaming = false) {
   return streaming ? STREAMING_REMARK_PLUGINS : MARKDOWN_REMARK_PLUGINS
 }
 

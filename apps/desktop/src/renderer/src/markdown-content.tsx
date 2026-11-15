@@ -37,10 +37,10 @@ const LINK_SAFETY = { enabled: false } as const
 
 const FileLinkContext = createContext<FileLinkNavigation | null>(null)
 
-export function MarkdownNavigation({ baseDir, onOpenFile, children }: Omit<FileLinkNavigation, 'baseDir'> & {
+export function MarkdownNavigation({ baseDir, workspaceDir, onNavigate, children }: Omit<FileLinkNavigation, 'baseDir'> & {
   baseDir: string | null; children: ReactNode
 }) {
-  const value = useMemo(() => baseDir ? { baseDir, onOpenFile } : null, [baseDir, onOpenFile])
+  const value = useMemo(() => baseDir ? { baseDir, workspaceDir, onNavigate } : null, [baseDir, workspaceDir, onNavigate])
   return <FileLinkContext value={value}>{children}</FileLinkContext>
 }
 
@@ -54,7 +54,6 @@ export const MarkdownContent = memo(function MarkdownContent({
   renderMath?: boolean
 }) {
   const response = useContext(ResponseSourcesContext)
-  const fileLinks = useContext(FileLinkContext)
   const rootRef = useRef<HTMLDivElement>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -109,7 +108,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         linkSafety={LINK_SAFETY}
         plugins={markdownPluginsFor(mathEnabled)}
         remend={MARKDOWN_REMEND_OPTIONS}
-        remarkPlugins={markdownRemarkPlugins(effectiveStreaming, !!fileLinks)}
+        remarkPlugins={markdownRemarkPlugins(effectiveStreaming)}
         rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
       >
         {renderedText}
@@ -125,8 +124,10 @@ function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-cit
   }) {
   const response = useContext(ResponseSourcesContext)
   const navigation = useContext(FileLinkContext)
-  if (filePath && navigation) {
-    return <MarkdownFileLink {...navigation} path={filePath} line={line} endLine={endLine}>{children}</MarkdownFileLink>
+  if (filePath) {
+    return navigation
+      ? <MarkdownFileLink {...navigation} path={filePath} line={line} endLine={endLine}>{children}</MarkdownFileLink>
+      : children
   }
   const sourceUrl = normalizeSourceUrl(href)
   const source = citationUrl ? response?.sources.find(source => source.url === citationUrl) : undefined

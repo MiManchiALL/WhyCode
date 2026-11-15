@@ -34,7 +34,7 @@ describe('Markdown 自定义元素契约', () => {
     assert.match(link.className, /\bunderline\b/u)
   })
 
-  it('文件按钮在所属工作区打开当前文件，同一路径的行号重复点击仍触发定位', async t => {
+  it('路径按钮在所属工作区打开文件和目录，同一行可重复定位', async t => {
     const { window, document } = parseHTML('<html><body></body></html>')
     const globals = { window, document, IS_REACT_ACT_ENVIRONMENT: true }
     const previous = Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
@@ -48,12 +48,16 @@ describe('Markdown 自定义元素契约', () => {
       }
     })
     let state = new RightPanelSessionStore(null).get('test')
-    async function click(projectDir: string, path: string, line?: number) {
+    async function renderLink(baseDir: string, path: string, line?: number, workspaceDir = baseDir) {
       await act(async () => root.render(createElement(MarkdownFileLink, {
-        baseDir: projectDir, path, line, onOpenFile: page => { state = openRightPanelPage(state, page) },
-      }, '对照报告')))
-      const button = document.querySelector('button')!
-      assert.equal(button.textContent, '对照报告')
+        baseDir, workspaceDir, path, line, onNavigate: page => { state = openRightPanelPage(state, page) },
+      }, '工作区路径')))
+      assert.equal(document.body.textContent, '工作区路径')
+      return document.querySelector('button')
+    }
+    async function click(projectDir: string, path: string, line?: number) {
+      const button = await renderLink(projectDir, path, line)
+      assert.ok(button)
       button.click()
       const page = activeRightPanelPage(state)
       assert.ok(page?.kind === 'file' && page.source.kind === 'current')
@@ -75,6 +79,22 @@ describe('Markdown 自定义元素契约', () => {
     assert.equal((await click('/srv/repo', 'docs/实验\\记录.md')).name, '实验\\记录.md')
     await click('/srv/repo', 'docs/实验/记录.md')
     assert.equal(state.tabs.length, 4)
+
+    for (const [path, base, workspace, directory, title] of [
+      ['Coyote/', '/srv/project', '/srv/project', 'Coyote', '/srv/project/Coyote'],
+      ['../hw/', '/srv/project/docs/note', '/srv/project', 'docs/hw', '/srv/project/docs/hw'],
+      ['..\\', 'C:\\Project\\notes', 'c:\\project', '', 'C:\\Project'],
+      ['工具\\源码\\', 'C:\\项目', 'C:\\项目', '工具/源码', 'C:\\项目\\工具\\源码'],
+    ] as const) {
+      const button = await renderLink(base, path, undefined, workspace)
+      assert.ok(button)
+      assert.equal(button.dataset.kind, 'directory')
+      assert.equal(button.title, title)
+      button.click()
+      assert.deepEqual(activeRightPanelPage(state), { kind: 'workspace', ...(directory && { directory }), expanded: [] })
+    }
+    assert.equal(await renderLink('/srv/project', '/srv/project-other/'), null)
+    assert.equal(await renderLink('/srv/project', 'C:/other/'), null)
   })
 })
 

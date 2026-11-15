@@ -43,7 +43,7 @@ export function sourceCitations(tree: Root): SourceCitation[] {
   return citations
 }
 
-export const remarkResponseLinks: Plugin<[{ files?: boolean }?], Root> = (options) => (tree, file) => {
+export const remarkResponseLinks: Plugin<[], Root> = () => (tree, file) => {
   const links = new Map<number, Properties>()
   for (const { node, target } of markdownLinks(tree)) {
     const offset = node.position?.start.offset
@@ -51,10 +51,10 @@ export const remarkResponseLinks: Plugin<[{ files?: boolean }?], Root> = (option
     const source = linkSource(node, target)
     if (source) {
       links.set(offset, { 'data-source-citation-url': source.url })
-    } else if (options?.files) {
+    } else {
       const reference = markdownFileTarget(target.url)
       if (!reference) continue
-      // Streamdown 会把相对路径解析成网站根路径，并拦截盘符。文件只由预览按钮打开。
+      // 清洗器会拦截裸相对路径和盘符。保留已识别的工作区目标，交给所属会话导航。
       node.data ??= {}
       node.data.hProperties = { ...node.data.hProperties, href: '#workspace-file' }
       links.set(offset, { 'data-file-path': reference.path, 'data-file-line': reference.line, 'data-file-end-line': reference.endLine })

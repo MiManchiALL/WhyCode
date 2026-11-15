@@ -43,7 +43,7 @@ function Fixture() {
   const saveMessage = (text: string) => { setMessage(text); sessionStorage.setItem('sent', text) }
   return <div className="grid h-screen grid-cols-[minmax(240px,1fr)_minmax(320px,1.3fr)]">
     <main className="space-y-4 p-5">
-      <div className="wc-conversation-copy"><MarkdownNavigation baseDir={workspace} onOpenFile={open}>
+      <div className="wc-conversation-copy"><MarkdownNavigation baseDir={workspace} onNavigate={open}>
         <MarkdownContent text={'[`sample` 代码](sample.ts#L64-L66)'} />
       </MarkdownNavigation></div>
       <p id="prose">正文可单独选择。</p>

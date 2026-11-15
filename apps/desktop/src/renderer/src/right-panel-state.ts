@@ -24,7 +24,7 @@ export type BrowserReferenceRequest = { kind: 'new' } | { kind: 'edit'; draftId:
 export type RightPanelPage =
   | { kind: 'terminal'; terminal: TerminalInfo }
   | { kind: 'browser'; id: string; url: string; title: string; workspaceFile?: boolean; referenceRequest?: BrowserReferenceRequest }
-  | { kind: 'workspace'; expanded: string[] }
+  | { kind: 'workspace'; directory?: string; expanded: string[] }
   | { kind: 'changes'; checkpointIds: string[]; expandedPaths: string[]; selectedPath: string | null }
   | { kind: 'compaction'; index: number }
   | GitPage
@@ -234,6 +234,9 @@ export function openRightPanelPage(
   const tab = { id, page }
   if (existingIndex >= 0) {
     const existing = tabs[existingIndex]!.page
+    if (page.kind === 'workspace' && existing.kind === 'workspace' && page.directory === existing.directory) {
+      return { ...state, open: true, activeTabId: id }
+    }
     tabs[existingIndex] = page.kind === 'file' && existing.kind === 'file'
       ? { id, page: { ...existing, ...page } } : tab
   } else {
@@ -374,7 +377,11 @@ function parsePage(value: unknown): RightPanelPage | null {
       ...(page.workspaceFile === true ? { workspaceFile: true } : {}) }
   }
   if (page.kind === 'workspace' && Array.isArray(page.expanded) && page.expanded.every(path => typeof path === 'string')) {
-    return { kind: page.kind, expanded: page.expanded.slice(0, MAX_EXPANDED_WORKSPACE_DIRECTORIES) }
+    if (page.directory !== undefined && typeof page.directory !== 'string') return null
+    return {
+      kind: page.kind, ...(page.directory && { directory: page.directory }),
+      expanded: page.expanded.slice(0, MAX_EXPANDED_WORKSPACE_DIRECTORIES),
+    }
   }
   if (page.kind === 'changes') {
     const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string')

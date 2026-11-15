@@ -9,11 +9,13 @@ import { useScrollArea } from './use-scroll-area.ts'
 import { captureWorkspaceBrowserPosition, restoreWorkspaceBrowserPosition, type WorkspaceBrowserPosition } from './workspace-browser-position.ts'
 import { pathReferenceText, workspacePathReference, WORKSPACE_PATH_MIME, type PathReference } from './path-reference.ts'
 import { useRefreshFeedback } from './use-refresh-feedback.ts'
+import { resolveWorkspaceFilePath } from './local-files.ts'
 
 interface BrowserProps {
   runtimeId: string
   directories: WorkspaceDirectories
   rootPath: string
+  directory: string
   expanded: readonly string[]
   onExpandedChange: (expanded: string[]) => void
   onOpenFile: (path: string, name: string) => void
@@ -26,7 +28,8 @@ interface BrowserProps {
 export function WorkspaceBrowser(props: BrowserProps) {
   const refresh = useRefreshFeedback()
   const { ref, onScroll, overscrollBehaviorY } = useScrollArea(props.expanded)
-  const [restoring, setRestoring] = useState(() => props.position?.rootPath === props.rootPath ? props.position : null)
+  const displayedPath = props.directory ? resolveWorkspaceFilePath(props.directory, props.rootPath) : props.rootPath
+  const [restoring, setRestoring] = useState(() => props.position?.rootPath === displayedPath ? props.position : null)
   const pendingPosition = useRef(restoring)
   const savePosition = useRef(props.onPositionChange)
   savePosition.current = props.onPositionChange
@@ -55,17 +58,18 @@ export function WorkspaceBrowser(props: BrowserProps) {
     return () => {
       observer.disconnect()
       for (const event of interactions) element.removeEventListener(event, release)
-      savePosition.current(pendingPosition.current ?? captureWorkspaceBrowserPosition(element, props.rootPath))
+      savePosition.current(pendingPosition.current ?? captureWorkspaceBrowserPosition(element, displayedPath))
     }
-  }, [ref, props.rootPath])
+  }, [ref, displayedPath])
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <FilePreviewToolbar path={props.rootPath}>
+      <FilePreviewToolbar path={displayedPath}>
         <button type="button" className="wc-preview-action" title="刷新目录" aria-label="刷新目录" disabled={refresh.busy} aria-busy={refresh.busy}
           onClick={() => void refresh.run(() => props.directories.refresh())}><RefreshCw size={15} className={refresh.busy ? 'animate-spin' : ''} /></button>
       </FilePreviewToolbar>
-      <div ref={ref} onScroll={onScroll} style={{ overscrollBehaviorY }} className="wc-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-2" aria-label="当前工作路径内容">
-        <DirectoryLevel {...props} restoring={restoring} path="" />
+      <div ref={ref} onScroll={onScroll} style={{ overscrollBehaviorY }} className="wc-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-2"
+        aria-label={props.directory ? `${displayedPath} 目录内容` : '当前工作路径内容'}>
+        <DirectoryLevel {...props} restoring={restoring} path={props.directory} />
       </div>
     </div>
   )
