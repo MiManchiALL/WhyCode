@@ -267,7 +267,12 @@ import {
 } from './image-protocol.ts'
 
 registerFileSchemes()
-const workspaceFiles = new WorkspaceFiles()
+// 域名预检与实际请求共用 Chromium 的解析缓存和网络栈。
+const publicWeb = {
+  fetchImpl: createElectronWebPageFetch(options => net.request(options)),
+  resolveHost: createElectronWebHostResolver((hostname, options) => net.resolveHost(hostname, options)),
+}
+const workspaceFiles = new WorkspaceFiles(publicWeb)
 
 const configSecretCodec: ConfigSecretCodec = {
   isAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -344,18 +349,11 @@ const webSearchTool = createWebSearchTool({
 })
 
 function createSessionWebPageTools(recorder: SessionJournal) {
-  const fetchImpl = createElectronWebPageFetch((options) => net.request(options))
-  const resolveHost = createElectronWebHostResolver((hostname, options) =>
-    net.resolveHost(hostname, options))
   const fetchDocument = createConfiguredWebDocumentFetcher({
     getConfig: loadAppConfig,
     fetchImpl: (input, init) => net.fetch(input, init),
-    resolveHost,
-    fetchBuiltin: createWebDocumentFetcher({
-      fetchImpl,
-      // 预检与实际请求共用 Chromium 的解析缓存和网络栈；重定向仍逐跳重新校验。
-      resolveHost,
-    }),
+    resolveHost: publicWeb.resolveHost,
+    fetchBuiltin: createWebDocumentFetcher(publicWeb),
   })
   const reader = createWebPageReader({
     fetchDocument,
@@ -2981,10 +2979,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
     return null
   })
-  protocol.handle(SITE_ICON_SCHEME, createSiteIconHandler({
-    fetchImpl: createElectronWebPageFetch(options => net.request(options)),
-    resolveHost: createElectronWebHostResolver((hostname, options) => net.resolveHost(hostname, options)),
-  }))
+  protocol.handle(SITE_ICON_SCHEME, createSiteIconHandler(publicWeb))
   backgroundTaskWakeups = new BackgroundTaskWakeQueue({
     resolveRuntime: resolveBackgroundTaskRuntime,
     reserveWorkStart: (runtime) => runtimeRegistry.reserveWorkStart(runtime),

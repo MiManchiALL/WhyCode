@@ -20,6 +20,25 @@ async function withWorkspace(t: TestContext, run: (env: Awaited<ReturnType<typeo
   })
 }
 
+it('SSH Markdown 预览从文档所在目录通过 SFTP 读取配图', async t => {
+  await withWorkspace(t, async (env, io) => {
+    const docs = join(env.root, 'project', 'docs')
+    await mkdir(join(docs, 'img'), { recursive: true })
+    await writeFile(join(docs, 'README.md'), '![标志](img/logo.svg)')
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="12"/>'
+    await writeFile(join(docs, 'img', 'logo.svg'), svg)
+    const files = new WorkspaceFiles()
+    const view = await files.open(1, { kind: 'file', runtimeId: 'test', path: env.project + '/docs/README.md' }, env.project, () => {}, io)
+    try {
+      assert.ok(view.kind === 'file' && view.remote && view.url)
+      const response = await files.response(new Request(new URL('img/logo.svg', view.url)))
+      assert.equal(response.headers.get('content-type'), 'image/svg+xml')
+      assert.equal(await response.text(), svg)
+      assert.equal((await files.response(new Request(new URL('img/missing.svg', view.url)))).status, 404)
+    } finally { files.close(1, view.id) }
+  })
+})
+
 it('SSH 会话按模型收到的行列提示续读超长文本', async t => {
   await withWorkspace(t, async (env, io) => {
     const path = 'records.txt'

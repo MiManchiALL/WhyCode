@@ -18,12 +18,13 @@ import { Streamdown, type Components } from 'streamdown'
 import { MarkdownAnchor, MarkdownFileLink, MarkdownUnorderedList, type FileLinkNavigation } from './markdown-elements.ts'
 import { MarkdownTable } from './markdown-table.tsx'
 import { MarkdownCodeBlock } from './markdown-code-block.tsx'
+import { documentImageComponents, documentImageLink } from './markdown-document-images.ts'
 import { ResponseSourcesContext } from './response-presentation.ts'
 import { normalizeSourceUrl, WEB_SOURCE_CITATION_MARKER } from '@whycode/core/web-source'
 import {
   markdownPluginsFor,
   markdownRemarkPlugins,
-  MARKDOWN_REHYPE_PLUGINS,
+  markdownRehypePlugins,
   MARKDOWN_REMEND_OPTIONS,
   normalizeMathDelimiters,
 } from './markdown-rendering.ts'
@@ -48,10 +49,12 @@ export const MarkdownContent = memo(function MarkdownContent({
   text,
   streaming = false,
   renderMath,
+  documentUrl,
 }: {
   text: string
   streaming?: boolean
   renderMath?: boolean
+  documentUrl?: string
 }) {
   const response = useContext(ResponseSourcesContext)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -64,6 +67,7 @@ export const MarkdownContent = memo(function MarkdownContent({
     () => mathEnabled ? normalizeMathDelimiters(text) : text,
     [mathEnabled, text],
   )
+  const rehypePlugins = useMemo(() => markdownRehypePlugins(documentUrl), [documentUrl])
 
   const clearHighlight = useCallback(() => {
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
@@ -91,11 +95,12 @@ export const MarkdownContent = memo(function MarkdownContent({
   const components = useMemo<Components>(() => ({
     table: MarkdownTable,
     pre: MarkdownCodeBlock,
+    ...(documentUrl && documentImageComponents),
     ul: ({ node, className, children, ...props }) => {
       return <MarkdownUnorderedList {...props} node={node} className={className}>{children}</MarkdownUnorderedList>
     },
-    a: (props) => <MarkdownLink {...props} onSourceClick={revealSource} />,
-  }), [revealSource])
+    a: (props) => <MarkdownLink {...props} imageLink={!!documentUrl && documentImageLink(props.node)} onSourceClick={revealSource} />,
+  }), [documentUrl, revealSource])
 
   return (
     <div ref={rootRef} className="wc-markdown">
@@ -109,7 +114,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         plugins={markdownPluginsFor(mathEnabled)}
         remend={MARKDOWN_REMEND_OPTIONS}
         remarkPlugins={markdownRemarkPlugins(effectiveStreaming)}
-        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
       >
         {renderedText}
       </Streamdown>
@@ -118,9 +123,9 @@ export const MarkdownContent = memo(function MarkdownContent({
 })
 
 /** 链接直接订阅回答投影，流式块缓存也能在正常完成时切换到引用展示。 */
-function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-citation-url': citationUrl,
+function MarkdownLink({ children, href, onClick, onSourceClick, imageLink, 'data-source-citation-url': citationUrl,
   'data-file-path': filePath, 'data-file-line': line, 'data-file-end-line': endLine, ...props }: ComponentProps<typeof MarkdownAnchor> & {
-    onSourceClick: (url: string) => void; 'data-source-citation-url'?: string; 'data-file-path'?: string; 'data-file-line'?: number; 'data-file-end-line'?: number
+    imageLink: boolean; onSourceClick: (url: string) => void; 'data-source-citation-url'?: string; 'data-file-path'?: string; 'data-file-line'?: number; 'data-file-end-line'?: number
   }) {
   const response = useContext(ResponseSourcesContext)
   const navigation = useContext(FileLinkContext)
@@ -152,7 +157,7 @@ function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-cit
     {source ? <>
       <SourceIcon kind={sourceKindForUrl(source.url)} />
       <span className="sr-only">来源：{source.title}</span>
-    </> : <>{siteOrigin && <SiteIcon key={siteOrigin} origin={siteOrigin} />}{children}</>}
+    </> : <>{siteOrigin && !imageLink && <SiteIcon key={siteOrigin} origin={siteOrigin} />}{children}</>}
   </MarkdownAnchor>
 }
 

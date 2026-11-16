@@ -84,11 +84,16 @@ it('plain text and oversized source do not start a worker; failed workers can be
 
 it('Markdown 语言标记与文件预览复用语法，未知标记不启动额外 Worker', () => {
   setup()
-  for (const [hint, language] of [['ts', 'typescript'], ['shell', 'bash'], ['c++', 'cpp'], ['pwsh', 'powershell'], ['PYTHON', 'python']]) {
-    request(hint!, 'sample')
+  const cases = [
+    ['ts', 'typescript'], ['shell', 'bash'], ['c++', 'cpp'], ['pwsh', 'powershell'], ['PYTHON', 'python'],
+    ['bibtex', 'bibtex'], ['references.BIB', 'bibtex'], ['rtl/top.v', 'verilog'], ['systemverilog', 'system-verilog'],
+    ['rtl/top.svh', 'system-verilog'], ['CMakeLists.txt', 'cmake'], ['Makefile', 'make'], ['.env.local', 'dotenv'],
+  ] as const
+  for (const [hint, language] of cases) {
+    request(hint, 'sample')
     assert.equal((TestWorker.instances[0]!.requests.at(-1) as Extract<HighlightRequest, { type: 'highlight' }>).language, language)
   }
   request('unknown-language', 'sample')
   assert.equal(TestWorker.instances.length, 1)
-  assert.equal(TestWorker.instances[0]!.requests.length, 5)
+  assert.equal(TestWorker.instances[0]!.requests.length, cases.length)
 })
