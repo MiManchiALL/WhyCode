@@ -1626,6 +1626,18 @@ button.wc-compaction-summary:hover:enabled {
   padding-block: 0.2em;
 }
 
+.wc-document-image {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+
+.wc-document-image[data-failed] {
+  width: auto;
+  color: var(--wc-muted);
+}
+
 .wc-markdown .wc-inline-source {
   display: inline-flex;
   align-items: center;

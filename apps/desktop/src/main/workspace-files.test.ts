@@ -7,12 +7,13 @@ import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { it, type TestContext } from 'node:test'
 import { WorkspaceFiles } from './workspace-files.ts'
-import { DIRECTORY_PAGE_SIZE, MAX_TEXT_PREVIEW_BYTES, documentFormat, previewMediaType } from '../shared/workspace-files.ts'
+import { DIRECTORY_PAGE_SIZE, MAX_DOCUMENT_PREVIEW_BYTES, MAX_TEXT_PREVIEW_BYTES, documentFormat, previewMediaType } from '../shared/workspace-files.ts'
+import type { WebDocumentFetcherOptions } from './web-page/network.ts'
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, web?: WebDocumentFetcherOptions) {
   const root = await mkdtemp(join(tmpdir(), 'whycode-file-browser-'))
   const workspace = join(root, 'project')
-  const files = new WorkspaceFiles()
+  const files = new WorkspaceFiles(web)
   await mkdir(workspace)
   t.after(async () => {
     files.closeOwner(1)
@@ -144,6 +145,47 @@ it('文件视图各有独立预览源，撤销一个地址不影响其它预览'
   assert.equal((await files.response(new Request(second.url!))).status, 200)
   files.closeRuntime('a')
   assert.equal((await files.response(new Request(second.url!))).status, 404)
+})
+
+it('公网配图只在活动 Markdown 视图中按图片读取，关闭视图也取消正在读取的图', async t => {
+  const calls: string[] = []
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>'
+  const { document, files } = await fixture(t, {
+    resolveHost: async () => ({ endpoints: [{ address: '93.184.216.34' }] }),
+    fetchImpl: async (url, init) => {
+      calls.push(url)
+      assert.equal(init.credentials, 'omit')
+      assert.equal(init.referrerPolicy, 'no-referrer')
+      if (url.endsWith('/redirect')) return Response.redirect('http://127.0.0.1/private')
+      if (url.endsWith('/page')) return new Response('<html></html>', { headers: { 'content-type': 'text/html' } })
+      if (url.endsWith('/large')) return new Response('x', { headers: { 'content-type': 'image/png', 'content-length': String(MAX_DOCUMENT_PREVIEW_BYTES + 1) } })
+      if (url.endsWith('/pending')) return new Response(new ReadableStream({
+        start(controller) { init.signal!.addEventListener('abort', () => controller.error(init.signal!.reason), { once: true }) },
+      }), { headers: { 'content-type': 'image/png' } })
+      return new Response(svg, { headers: { 'content-type': 'image/svg+xml; charset=utf-8' } })
+    },
+  })
+  const md = await document('readme.md', '![status](https://example.org/badge.svg)')
+  const html = await document('readme.html', '<p>report</p>')
+  assert.equal((await files.response(new Request(new URL('readme.html', md.url!)))).status, 403)
+  const image = (view: typeof md, path: string) => {
+    const url = new URL('/', view.url!)
+    url.searchParams.set('image', 'https://example.org/' + path)
+    return files.response(new Request(url))
+  }
+  assert.equal((await image(html, 'badge.svg')).status, 403)
+  const response = await image(md, 'badge.svg?branch=main')
+  assert.equal(await response.text(), svg)
+  assert.equal(response.headers.get('content-type'), 'image/svg+xml')
+  assert.match(response.headers.get('content-security-policy')!, /sandbox;/u)
+  assert.equal((await image(md, 'redirect')).ok, false)
+  assert.deepEqual(calls, ['https://example.org/badge.svg?branch=main', 'https://example.org/redirect'])
+  assert.equal((await image(md, 'page')).status, 415)
+  assert.equal((await image(md, 'large')).ok, false)
+  const pending = (await image(md, 'pending')).arrayBuffer()
+  files.close(1, md.id)
+  await assert.rejects(pending, /abort/iu)
+  assert.equal((await image(md, 'badge.svg')).status, 404)
 })
 
 it('目录不能越界；HTML 不能读取隐藏、非静态文件、路径转义或目录链接外的文件', async t => {

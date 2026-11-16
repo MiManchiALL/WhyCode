@@ -126,39 +126,25 @@ async function readDocumentResponse(response: Response, url: URL): Promise<WebDo
   }
 }
 
-export async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
+/** 逐块限制解压后的实际字节数，图片可直接转发，正文读完后再交给解析器。 */
+export async function boundedWebBody(response: Response, maxBytes: number): Promise<ReadableStream<Uint8Array> | null> {
   const declaredLength = Number(response.headers.get('content-length'))
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     await response.body?.cancel().catch(() => {})
     throw new WebPageError('目标网页超过安全大小限制')
   }
-  if (!response.body) return new Uint8Array()
-
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
   let totalBytes = 0
-  try {
-    while (true) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      totalBytes += chunk.value.byteLength
-      if (totalBytes > maxBytes) {
-        await reader.cancel()
-        throw new WebPageError('目标网页超过安全大小限制')
-      }
-      chunks.push(chunk.value)
-    }
-  } finally {
-    reader.releaseLock()
-  }
+  return response.body?.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      totalBytes += chunk.byteLength
+      if (totalBytes > maxBytes) throw new WebPageError('目标网页超过安全大小限制')
+      controller.enqueue(chunk)
+    },
+  })) ?? null
+}
 
-  const bytes = new Uint8Array(totalBytes)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return bytes
+export async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
+  return new Uint8Array(await new Response(await boundedWebBody(response, maxBytes)).arrayBuffer())
 }
 
 function decodeWebDocument(

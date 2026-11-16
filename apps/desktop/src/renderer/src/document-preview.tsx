@@ -116,7 +116,7 @@ function TextDocument({ url, path, markdown, wrap, location, onLocated }: {
   if (error) return <FilePreviewMessage>{error}</FilePreviewMessage>
   if (text === null) return <FilePreviewMessage>正在读取正文…</FilePreviewMessage>
   if (markdown) return (
-    <div className="wc-scrollbar min-h-0 flex-1 overflow-auto p-4"><MarkdownContent text={text} /></div>
+    <div className="wc-scrollbar min-h-0 flex-1 overflow-auto p-4"><MarkdownContent text={text} documentUrl={url} /></div>
   )
   return <SyntaxCode path={path} lines={lines} wrap={wrap} location={location} onLocated={onLocated} className="flex-1" />
 }

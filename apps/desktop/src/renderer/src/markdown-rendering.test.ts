@@ -4,16 +4,61 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Streamdown } from 'streamdown'
 import { parseHTML } from 'linkedom'
+import { documentImageComponents } from './markdown-document-images.ts'
 import {
   markdownPluginsFor,
   markdownRemarkPlugins,
-  MARKDOWN_REHYPE_PLUGINS,
+  markdownRehypePlugins,
   MARKDOWN_REMEND_OPTIONS,
   normalizeMathDelimiters,
   parseMarkdown,
 } from './markdown-rendering.ts'
 
 describe('Markdown 渲染', () => {
+  it('文档配图使用文件自己的预览地址，保留主题候选、尺寸、外链徽章和刷新版本', () => {
+    const base = 'whycode-preview://view/docs/README.md?v=2'
+    const source = [
+      '<picture><source media="(prefers-color-scheme: dark)" srcset="img/dark,a.png 1x, ../dark@2x.png 2x">',
+      '<img width="600" src="img/light.png" srcset="img/small.png 400w, img/large.png 800w" sizes="100vw"></picture>',
+      '',
+      '[![Build](https://images.example.org/build.svg?branch=main#status)](https://example.org/actions)',
+      '',
+      '![另一个图](<目录/一 图.png>)',
+    ].join('\n')
+    const doc = parseHTML(renderedHtml(source, false, true, base)).document
+    const picture = doc.querySelector('picture')!
+    const img = picture.querySelector('img')!
+    const dark = picture.querySelector('source')!
+    assert.equal(img.getAttribute('src'), 'whycode-preview://view/docs/img/light.png?v=2')
+    assert.equal(img.getAttribute('width'), '600')
+    assert.equal(img.getAttribute('sizes'), '100vw')
+    assert.equal(img.getAttribute('loading'), 'lazy')
+    assert.equal(img.getAttribute('decoding'), 'async')
+    assert.equal(img.getAttribute('srcSet'), 'whycode-preview://view/docs/img/small.png?v=2 400w, whycode-preview://view/docs/img/large.png?v=2 800w')
+    assert.equal(dark.getAttribute('media'), '(prefers-color-scheme: dark)')
+    assert.equal(dark.getAttribute('srcSet'), 'whycode-preview://view/docs/img/dark,a.png?v=2 1x, whycode-preview://view/dark@2x.png?v=2 2x')
+    const badge = doc.querySelector('a img')!
+    const url = new URL(badge.getAttribute('src')!)
+    assert.equal(url.host, 'view')
+    assert.equal(url.pathname, '/')
+    assert.equal(url.searchParams.get('image'), 'https://images.example.org/build.svg?branch=main')
+    assert.equal(url.hash, '#status')
+    assert.equal(badge.parentElement?.getAttribute('href'), 'https://example.org/actions')
+    assert.equal(decodeURI(doc.querySelector('img[alt="另一个图"]')!.getAttribute('src')!), 'whycode-preview://view/docs/目录/一 图.png?v=2')
+    assert.doesNotMatch(renderedHtml(source, false, true), /whycode-preview:/u)
+  })
+
+  it('只交付当前文档的图片资源，过滤无效候选并保留 HTML 净化', () => {
+    const source = '<picture><source srcset="file:///outside.png 1x, whycode-preview://other/x.png 2x, img/ok.png 3x">' +
+      '<img src="file:///outside.png" alt="替代说明" onerror="alert(1)"></picture>\n\n' +
+      '<wc-document-image src="https://example.org/forged.png"></wc-document-image>'
+    const doc = parseHTML(renderedHtml(source, false, true, 'whycode-preview://view/docs/readme.md')).document
+    assert.equal(doc.querySelector('source')?.getAttribute('srcSet'), 'whycode-preview://view/docs/img/ok.png 3x')
+    assert.equal(doc.querySelectorAll('img').length, 1)
+    assert.equal(doc.querySelector('picture img')?.hasAttribute('src'), false)
+    assert.doesNotMatch(doc.toString(), /file:\/\/\/outside|whycode-preview:\/\/other|onerror=|forged\.png/u)
+  })
+
   it('同段的近似值与数值范围不会跨正文形成删除线', () => {
     const source = '快速恢复的窗口约为（~90 ms）；**中断时间延长到 100 ms** 后，需要 6~7 秒完成重训练。'
     for (const streaming of [true, false]) {
@@ -446,7 +491,7 @@ function renderedDocument(source: string, streaming: boolean) {
   return parseHTML(`<!doctype html><html><body>${html}</body></html>`).document
 }
 
-function renderedHtml(source: string, streaming: boolean, renderMath: boolean) {
+function renderedHtml(source: string, streaming: boolean, renderMath: boolean, documentUrl?: string) {
   const renderedSource = renderMath ? normalizeMathDelimiters(source) : source
   return renderToStaticMarkup(createElement(
     Streamdown,
@@ -455,7 +500,8 @@ function renderedHtml(source: string, streaming: boolean, renderMath: boolean) {
       plugins: markdownPluginsFor(renderMath),
       remend: MARKDOWN_REMEND_OPTIONS,
       remarkPlugins: markdownRemarkPlugins(streaming),
-      rehypePlugins: MARKDOWN_REHYPE_PLUGINS,
+      rehypePlugins: markdownRehypePlugins(documentUrl),
+      components: documentUrl ? documentImageComponents : undefined,
       linkSafety: { enabled: false },
     },
     renderedSource,

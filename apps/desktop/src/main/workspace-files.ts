@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { localWorkspaceIO, type WorkspaceIO } from '@whycode/core'
+import { IMAGE_MEDIA_TYPES } from '@whycode/core/document-formats'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createWriteStream } from 'node:fs'
 import { rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { WorkspaceFileWatch } from './workspace-file-watch.ts'
+import { boundedWebBody, fetchPublicWebResponse, WEB_DOCUMENT_TIMEOUT_MS, type WebDocumentFetcherOptions } from './web-page/network.ts'
+import { parseWebPageUrl } from './web-page/url-safety.ts'
 import {
   DIRECTORY_PAGE_SIZE, MAX_DOCUMENT_PREVIEW_BYTES, MAX_PREVIEW_VIEWS,
   MAX_TEXT_PREVIEW_BYTES, PREVIEW_SCHEME, PREVIEW_SANDBOX, documentFormat, previewMediaType,
@@ -25,10 +28,14 @@ interface FileView {
 }
 
 const byName = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
+const imageMediaTypes = new Set([...Object.values(IMAGE_MEDIA_TYPES), 'image/vnd.microsoft.icon'])
 
 /** 仅活动视图持有目录监听与预览地址，关闭即撤销，正文不留在宿主缓存。 */
 export class WorkspaceFiles {
   private readonly views = new Map<string, FileView>()
+  private readonly web?: WebDocumentFetcherOptions
+
+  constructor(web?: WebDocumentFetcherOptions) { this.web = web }
 
   async open(owner: number, request: OpenWorkspaceFileRequest, workingDirectory: string, changed: (id: string) => void, io: WorkspaceIO = localWorkspaceIO): Promise<WorkspaceFileView> {
     const { resolve, isAbsolute, dirname } = io.path
@@ -113,6 +120,15 @@ export class WorkspaceFiles {
       const url = new URL(request.url)
       const view = this.views.get(url.hostname)
       if (!view || view.kind !== 'file') return new Response(null, { status: 404 })
+      // 文件视图的根 URL 不指向文件，仅 Markdown 视图可用它读取公网配图。
+      if (url.pathname === '/') {
+        const image = url.searchParams.get('image')
+        if (!image || !this.web || documentFormat(view.path) !== 'markdown' || request.method !== 'GET') {
+          return new Response(null, { status: 403 })
+        }
+        const signal = AbortSignal.any([request.signal, view.abort.signal, AbortSignal.timeout(WEB_DOCUMENT_TIMEOUT_MS)])
+        return await webImageResponse(image, this.web, signal)
+      }
       const { io } = view
       const { resolve } = io.path
       const { stat, createReadStream } = io.fs
@@ -124,11 +140,14 @@ export class WorkspaceFiles {
         return new Response(null, { status: 403 })
       }
       const path = await containedRealPath(io, view.root, target)
+      const mediaType = previewMediaType(path) ?? 'text/plain'
+      if (!primary && documentFormat(view.path) === 'markdown' && !imageMediaTypes.has(mediaType)) {
+        return new Response(null, { status: 403 })
+      }
       const info = await stat(path)
       if (!info.isFile() || info.size > MAX_DOCUMENT_PREVIEW_BYTES) return new Response(null, { status: 413 })
       if (this.views.get(view.id) !== view) return new Response(null, { status: 404 })
       if (io.identity === 'local') view.watch.file(path, info)
-      const mediaType = previewMediaType(path) ?? 'text/plain'
       const headers = new Headers({
         'Content-Type': mediaType + (/(?:^text\/|json$)/u.test(mediaType) ? '; charset=utf-8' : ''),
         'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
@@ -210,6 +229,23 @@ export class WorkspaceFiles {
     if (!view || view.owner !== owner) throw new Error('文件视图已关闭，请重新打开')
     return view
   }
+}
+
+async function webImageResponse(image: string, web: WebDocumentFetcherOptions, signal: AbortSignal): Promise<Response> {
+  const { response } = await fetchPublicWebResponse(parseWebPageUrl(image), web, signal, 'image/*')
+  const type = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? ''
+  if (!imageMediaTypes.has(type)) {
+    await response.body?.cancel()
+    return new Response(null, { status: 415 })
+  }
+  return new Response(await boundedWebBody(response, MAX_DOCUMENT_PREVIEW_BYTES), {
+    headers: {
+      'Content-Type': type,
+      'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-store',
+    },
+  })
 }
 
 async function containedRealPath(io: WorkspaceIO, root: string, path: string): Promise<string> {

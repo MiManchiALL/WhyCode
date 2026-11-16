@@ -8,6 +8,7 @@ import { unified, type Pluggable } from 'unified'
 import { defaultRehypePlugins, defaultRemarkPlugins } from 'streamdown'
 import { rehypeResponseLinks, remarkResponseLinks } from './markdown-sources.ts'
 import { remarkMathSyntax } from './markdown-math.ts'
+import { rehypeDocumentImages } from './markdown-document-images.ts'
 
 // GFM 和中文扩展各自注册删除线语法，两处都必须保留数值范围中的单波浪号。
 const CJK_REMARK_PLUGINS_AFTER = cjk.remarkPluginsAfter.map(plugin =>
@@ -24,7 +25,7 @@ const BASE_REMARK_PLUGINS = Object.entries(defaultRemarkPlugins).map(([name, plu
 )
 const STREAMING_REMARK_PLUGINS = [...BASE_REMARK_PLUGINS, remarkResponseLinks]
 const MARKDOWN_REMARK_PLUGINS = [...STREAMING_REMARK_PLUGINS, remarkFrontmatter]
-export const MARKDOWN_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeResponseLinks]
+const BASE_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeResponseLinks]
 export const MARKDOWN_REMEND_OPTIONS = { linkMode: 'text-only' } as const
 
 const SETTLED_MARKDOWN_PLUGINS = {
@@ -55,6 +56,22 @@ export function markdownPluginsFor(renderMath: boolean) {
 
 export function markdownRemarkPlugins(streaming = false) {
   return streaming ? STREAMING_REMARK_PLUGINS : MARKDOWN_REMARK_PLUGINS
+}
+
+export function markdownRehypePlugins(documentUrl?: string): Pluggable[] {
+  if (!documentUrl) return BASE_REHYPE_PLUGINS
+  const plugins = Object.entries(defaultRehypePlugins).flatMap(([name, plugin]): Pluggable[] => {
+    if (name !== 'sanitize' || !Array.isArray(plugin)) return [plugin]
+    const [sanitize, schema] = plugin
+    const attributes = schema.attributes
+    return [
+      [sanitize, { ...schema, attributes: {
+        ...attributes, img: [...attributes.img, 'srcSet', 'sizes'], source: [...attributes.source, 'sizes', 'type'],
+      } }],
+      [rehypeDocumentImages, documentUrl],
+    ]
+  })
+  return [...plugins, rehypeResponseLinks]
 }
 
 /** 只规范化附着正文的块级公式；行内定界符由同一数学语法插件解析。 */
