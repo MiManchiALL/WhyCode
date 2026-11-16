@@ -1,4 +1,4 @@
-import type { HighlightLanguage } from './syntax-highlight.worker.ts'
+import type { HighlightLanguage } from './syntax-highlight-languages.ts'
 
 /** 高亮 Worker 生成的已转义行内标记，不包含原始文件 HTML。 */
 export type HighlightedLines = string[]

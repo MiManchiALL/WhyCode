@@ -2,6 +2,7 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath } from 'node:url'
+import { LANGUAGE_LOADERS } from './src/renderer/src/syntax-highlight-languages.ts'
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
@@ -33,8 +34,10 @@ export default defineConfig({
   renderer: {
     worker: { format: 'es' },
     optimizeDeps: {
-      // Worker 不在 HTML 导入图中；提前扫描可避免首次展开代码时重新预构建并刷新页面。
+      // Worker 不在 HTML 导入图中，启动时一并扫描高亮引擎和主题。
       entries: ['index.html', 'src/syntax-highlight.worker.ts'],
+      // 语法清单参与缓存键，增删语言时 Vite 会在启动阶段重新预构建。
+      include: Object.keys(LANGUAGE_LOADERS).map(language => `shiki/langs/${language}.mjs`),
     },
     plugins: [react(), tailwindcss()],
   },
