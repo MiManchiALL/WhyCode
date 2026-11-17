@@ -16,6 +16,18 @@ import { languageModel, modelEntry, toolStream, finalStream } from '../subagent-
 
 const tool = (name: string) => BUILTIN_TOOLS.find(item => item.name === name)!
 
+it('选择已知 SSH 工作路径只需验证目录，浏览目录才读取子项', async t => {
+  const env = await sshFixture(t, 'protocol')
+  await env.connections.connect(env.id, env.fingerprint)
+  const host = env.connections.host(env.id)
+  const workspaces = new SshWorkspaces(env.connections)
+  t.mock.method(host.io.fs, 'readdir', async () => { throw new Error('不可列出目录') })
+  assert.equal((await workspaces.select(host.target, 'project')).workingDirectory, env.project)
+  await assert.rejects(env.connections.directory(env.id, env.project), /不可列出目录/)
+  await writeFile(join(env.root, 'project/file.txt'), '')
+  await assert.rejects(workspaces.select(host.target, `${env.project}/file.txt`), /请选择远端文件夹/)
+})
+
 it('未知主机先返回指纹，认证失败和取消不部署组件，密码不进入公开配置', async t => {
   const env = await sshFixture(t)
   const changes: string[] = []

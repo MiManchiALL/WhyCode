@@ -126,7 +126,7 @@ test('SSH Skill 同步完整目录、更新未改副本、保护冲突，并可�
   const commands = env.commands.length
   const cleaned = await sync.clean(env.id, ['alpha', 'beta'], ['alpha', 'beta'])
   assert.equal(cleaned.results.every(item => item.ok), true)
-  assert.ok(env.commands.slice(commands).every(command => command === '/bin/sh -s'))
+  assert.ok(env.commands.slice(commands).every(command => command === '/bin/sh -s' || command.startsWith(`rm -rf -- '${env.remoteRoot}/.whycode/skills/.whycode-sync-`)))
   await assert.rejects(access(join(env.root, '.whycode')), { code: 'ENOENT' })
   assert.equal(env.connections.status(env.id), 'disconnected')
 })
@@ -153,6 +153,32 @@ test('删除连接可保留远端修改；原有 Skill 与项目、临时目录�
   await access(join(env.root, '.whycode/skills/beta/empty.txt'))
   await access(join(env.root, '.cache/whycode-scratch/session/Main/file'))
   await access(join(env.root, 'project'))
+})
+
+test('更新及清理仅核对选中副本，服务器回收暂存树并保留相邻副本', async t => {
+  const env = await sshFixture(t, 'protocol')
+  const home = join(env.root, 'local-home')
+  const source = await localSkill(home, 'alpha')
+  await localSkill(home, 'alphabet')
+  await env.connections.connect(env.id, env.fingerprint)
+  const sync = new SshSkillSync(env.connections, home, () => {})
+  assert.ok((await sync.sync(env.id, ['alpha', 'alphabet'])).results.every(item => item.ok))
+
+  const sibling = join(env.root, '.whycode/skills/alphabet/.whycode-skill-sync.json')
+  await writeFile(sibling, 'broken marker')
+  await assert.rejects(sync.list(env.id), SyntaxError)
+  const fs = env.connections.host(env.id).io.fs
+  const readdir = fs.readdir.bind(fs)
+  t.mock.method(fs, 'readdir', ((directory, options) => {
+    assert.ok(!directory.includes('/.whycode-sync-'), '清理暂存树不应逐目录读取 SFTP')
+    return readdir(directory, options)
+  }) satisfies typeof fs.readdir)
+  await writeFile(join(source, 'references/中文资料.txt'), '新内容')
+  assert.equal((await sync.sync(env.id, ['alpha'])).results[0]!.ok, true)
+  assert.equal(await readFile(join(env.root, '.whycode/skills/alpha/references/中文资料.txt'), 'utf8'), '新内容')
+  assert.equal((await sync.clean(env.id, ['alpha'], [])).results[0]!.ok, true)
+  await assert.rejects(access(join(env.root, '.whycode/skills/alpha')), { code: 'ENOENT' })
+  assert.equal(await readFile(sibling, 'utf8'), 'broken marker')
 })
 
 test('双根发现不扩大本地同步来源；远端 agents 同名项阻止覆盖且不纳入清理', async t => {
@@ -270,7 +296,9 @@ test('重启后缺少密码可重试；同步和清理临时连接不启动组�
   await assert.rejects(connections.resume(env.id), /请先点击/)
   await assert.rejects(access(join(env.root, '.cache/whycode-remote')), { code: 'ENOENT' })
   assert.equal((await sync.clean(env.id, ['alpha'], [])).results[0]!.ok, true)
-  assert.ok(env.commands.slice(commands).every(command => command === '/bin/sh -s'))
+  const offline = env.commands.slice(commands)
+  assert.equal(offline.filter(command => command.startsWith('rm -rf -- ')).length, 2)
+  assert.ok(offline.every(command => command === '/bin/sh -s' || command.startsWith(`rm -rf -- '${env.remoteRoot}/.whycode/skills/.whycode-sync-`)))
   await assert.rejects(access(join(env.root, '.whycode')), { code: 'ENOENT' })
 })
 

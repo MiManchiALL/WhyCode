@@ -1,5 +1,22 @@
 import type { WorkspaceFileSystem, WorkspaceIO } from '@whycode/core'
 
+export const FILE_CONCURRENCY = 8
+
+/** Keep independent file requests in flight, and settle every worker before releasing the transport. */
+export async function mapFileOperations<T, R>(items: readonly T[], work: (item: T) => Promise<R>, concurrency = FILE_CONCURRENCY): Promise<R[]> {
+  const results: R[] = []
+  let cursor = 0
+  let failure: { error: unknown } | undefined
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (!failure && cursor < items.length) {
+      const index = cursor++
+      try { results[index] = await work(items[index]!) } catch (error) { failure ??= { error } }
+    }
+  }))
+  if (failure) throw failure.error
+  return results
+}
+
 export async function exists(fs: WorkspaceFileSystem, file: string) {
   try { return await fs.lstat(file) }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }

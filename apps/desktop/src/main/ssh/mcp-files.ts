@@ -6,7 +6,7 @@ import {
 } from '@whycode/core'
 import type { RemoteMcpProject, RemoteMcpSelection } from '../../shared/ssh-mcp.ts'
 import { remoteMcpProjectPathSchema } from '../../shared/ssh-mcp.ts'
-import { exists, ordinaryDirectory, pruneEmptyParents } from './config-files.ts'
+import { exists, mapFileOperations, ordinaryDirectory, pruneEmptyParents } from './config-files.ts'
 import { digest } from './provision.ts'
 import { atomicSftpWrite } from './sftp.ts'
 
@@ -39,7 +39,9 @@ export class RemoteMcpFiles {
 
   private async index(): Promise<string[]> {
     // 索引发布前不会写项目文件；残留的索引暂存文件不承担恢复事实。
-    for (const file of await this.temporaryFiles(this.indexPath)) await this.io.fs.unlink(file)
+    const temporary = await this.temporaryFiles(this.indexPath)
+    if (!temporary) return []
+    for (const file of temporary) await this.io.fs.unlink(file)
     const bytes = await this.bytes(this.indexPath)
     if (!bytes) return []
     const decoded = decodeMcpConfig(bytes)
@@ -49,9 +51,9 @@ export class RemoteMcpFiles {
     return [...new Set(projects)].sort()
   }
 
-  private async temporaryFiles(file: string): Promise<string[]> {
+  private async temporaryFiles(file: string): Promise<string[] | null> {
     const directory = this.io.path.dirname(file)
-    if (!await ordinaryDirectory(this.io, directory)) return []
+    if (!await ordinaryDirectory(this.io, directory)) return null
     const prefix = this.io.path.basename(file) + '.'
     const names = (await this.io.fs.readdir(directory, { withFileTypes: true }))
       .filter(entry => entry.name.startsWith(prefix) && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.tmp$/u.test(entry.name.slice(prefix.length)))
@@ -66,8 +68,9 @@ export class RemoteMcpFiles {
 
   private async inspection(directory: string) {
     const file = this.path(directory)
-    const bytes = await this.bytes(file)
     const temporary = await this.temporaryFiles(file)
+    if (!temporary) return { bytes: null, temporary: [], digest: null }
+    const bytes = await this.bytes(file)
     const staging = []
     for (const path of temporary) staging.push([path, digest((await this.bytes(path))!)])
     return { bytes, temporary, digest: bytes || temporary.length ? digest(Buffer.from(JSON.stringify([bytes ? digest(bytes) : null, staging]))) : null }
@@ -120,7 +123,7 @@ export class RemoteMcpFiles {
       await ordinaryDirectory(this.io, this.io.path.dirname(file), true)
       await atomicSftpWrite(this.io.fs, file, bytes, 0o600)
     } catch (error) {
-      if (!await exists(this.io.fs, file) && !(await this.temporaryFiles(file)).length) {
+      if (!await exists(this.io.fs, file) && !(await this.temporaryFiles(file))?.length) {
         await this.writeIndex(projects)
         await pruneEmptyParents(this.io, this.io.path.dirname(file), directory)
       }
@@ -131,20 +134,18 @@ export class RemoteMcpFiles {
 
   async list(knownProjects: readonly string[]): Promise<RemoteMcpProject[]> {
     const indexed = await this.index()
-    const retained: string[] = []
-    const rows: RemoteMcpProject[] = []
-    for (const directory of [...new Set([...indexed, ...knownProjects])].sort()) {
+    const directories = [...new Set([...indexed, ...knownProjects])].sort()
+    const inspected = await mapFileOperations(directories, async (directory): Promise<RemoteMcpProject | null> => {
       this.path(directory)
       try {
         const state = await this.inspection(directory)
-        if (!state.digest) continue
-        retained.push(directory)
-        rows.push({ directory, digest: state.digest, ...(state.temporary.length ? { incomplete: true } : {}) })
+        return state.digest ? { directory, digest: state.digest, ...(state.temporary.length ? { incomplete: true } : {}) } : null
       } catch (error) {
-        retained.push(directory)
-        rows.push({ directory, error: error instanceof Error ? error.message : String(error) })
+        return { directory, error: error instanceof Error ? error.message : String(error) }
       }
-    }
+    })
+    const rows = inspected.filter(row => row !== null)
+    const retained = rows.map(row => row.directory)
     if (!retained.length || JSON.stringify(indexed) !== JSON.stringify(retained)) await this.writeIndex(retained)
     return rows
   }

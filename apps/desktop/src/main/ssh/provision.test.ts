@@ -4,10 +4,21 @@ import { tmpdir } from 'node:os'
 import { join, posix, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { it } from 'node:test'
-import type { Client, ClientChannel } from 'ssh2'
-import { localWorkspaceIO, type WorkspaceFileSystem } from '@whycode/core'
-import { digest, provisionRemote, quoteShell } from './provision.ts'
+import ssh2, { type Client, type ClientChannel } from 'ssh2'
+import { isUnknownWorkspaceOutcome, localWorkspaceIO, type WorkspaceFileSystem } from '@whycode/core'
+import { digest, provisionRemote, quoteShell, removeRemoteDirectory } from './provision.ts'
 import { prepareRemoteComponent } from './component.ts'
+
+it('服务器收到删除命令后未返回退出状态，保留结果未知并只发起一次删除', async t => {
+  const client = new ssh2.Client()
+  const channel = Object.assign(new PassThrough(), { stderr: new PassThrough() })
+  const execute = t.mock.method(client, 'exec', (_command: string, done: (error: null, stream: typeof channel) => void) => {
+    done(null, channel)
+    setImmediate(() => channel.destroy())
+  })
+  await assert.rejects(removeRemoteDirectory(client, '/fixture/staging'), isUnknownWorkspaceOutcome)
+  assert.equal(execute.mock.callCount(), 1)
+})
 
 it('远端校验只返回摘要，不下载组件；首次发布、重复连接与损坏校验保持一致', async t => {
   const root = await mkdtemp(join(tmpdir(), 'whycode-provision-'))

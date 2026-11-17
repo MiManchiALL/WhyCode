@@ -4,7 +4,7 @@ import { localWorkspaceIO, validateSessionId, type WorkspaceBinding } from '@why
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import type { SessionScratchPaths } from '../session-scratch.ts'
 import type { DesktopSessionRuntime } from '../desktop-session-runtime.ts'
-import { SshConnections, type ConnectedHost } from './connections.ts'
+import { resolveRemoteDirectory, SshConnections, type ConnectedHost } from './connections.ts'
 import { SshConnectionMissingError } from './store.ts'
 import { removeRemoteDirectory } from './provision.ts'
 import type { TerminalPty } from '../terminal-sessions.ts'
@@ -32,7 +32,7 @@ export class SshWorkspaces {
     const id = await this.connections.connectionIdForTarget(target)
     const connected = await this.connections.resume(id)
     if (connected.status !== 'connected') throw new Error('请先在连接设置中确认服务器指纹')
-    const { path } = await this.connections.directory(id, directory)
+    const path = await resolveRemoteDirectory(this.connections.host(id, target), directory)
     const connection = await this.connections.store.get(id)
     return { mode: 'ssh', target: this.connections.host(id, target).target, label: connection.connection.name, workingDirectory: path }
   }

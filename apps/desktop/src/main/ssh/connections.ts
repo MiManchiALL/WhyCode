@@ -7,7 +7,7 @@ import type { WorkspaceFileSystem, WorkspaceIO } from '@whycode/core'
 import type { SshConnection, SshConnectionInput, SshConnectionStatus, SshConnectResult, SshDirectory } from '../../shared/ssh.ts'
 import { SshConnectionMissingError, SshConnectionStore } from './store.ts'
 import { createSftpFileSystem } from './sftp.ts'
-import { execChannel, provisionRemote, quoteShell, removeRemoteEnvironment } from './provision.ts'
+import { execChannel, provisionRemote, quoteShell, removeRemoteDirectory, removeRemoteEnvironment } from './provision.ts'
 import { cleanupRemoteComponent, prepareRemoteComponent, readComponentIdentity, type RemoteComponent } from './component.ts'
 import { RemoteProcessHost } from './process.ts'
 import type { SshReleaseOptions } from '../../shared/ssh-skills.ts'
@@ -22,6 +22,12 @@ export interface ConnectedHost {
   component: RemoteComponent
   executable: string
   processes: RemoteProcessHost
+}
+
+export async function resolveRemoteDirectory(host: ConnectedHost, value?: string): Promise<string> {
+  const directory = await host.io.fs.realpath(value ? path.posix.resolve(host.home, value) : host.home)
+  if (!(await host.io.fs.stat(directory)).isDirectory()) throw new Error('请选择远端文件夹')
+  return directory
 }
 interface AuthenticatedHost { client: Client; fs: WorkspaceFileSystem; home: string; target: string }
 type ConnectionState =
@@ -129,7 +135,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
       if (!connection.fingerprint) await this.store.trust(id, expected!)
       const sftp = await new Promise<import('ssh2').SFTPWrapper>((resolve, reject) => client.sftp((error, value) => error ? reject(error) : resolve(value)))
       sftp.once('close', () => client.end())
-      const fs = createSftpFileSystem(sftp)
+      const fs = createSftpFileSystem(sftp, directory => removeRemoteDirectory(client, directory))
       const home = await fs.realpath('.')
       signal.throwIfAborted()
       return { client, fs, home, target: targetIdentity(connection, expected!) }
@@ -211,8 +217,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
   }
   async directory(id: string, value?: string): Promise<SshDirectory> {
     const host = this.host(id)
-    const directory = await host.io.fs.realpath(value ? path.posix.resolve(host.home, value) : host.home)
-    if (!(await host.io.fs.stat(directory)).isDirectory()) throw new Error('请选择远端文件夹')
+    const directory = await resolveRemoteDirectory(host, value)
     const entries = await host.io.fs.readdir(directory, { withFileTypes: true })
     return { path: directory, directories: entries.filter(item => item.isDirectory()).map(item => item.name).sort() }
   }

@@ -47,11 +47,11 @@ export async function sshFixture(t: TestContext, linux: boolean | 'protocol' = f
       session.on('sftp', acceptSftp => serveTestSftp(acceptSftp(), root, remoteRoot))
       session.on('exec', (acceptExec, _reject, info) => {
         const channel = acceptExec(); commands.push(info.command)
-        if (linux !== true && info.command.startsWith(`rm -rf -- '${remoteRoot}/.cache/whycode-scratch/`)) {
-          const id = info.command.slice(`rm -rf -- '${remoteRoot}/.cache/whycode-scratch/`.length, -1)
-          assert.match(id, /^[a-f0-9-]{36}$/u)
+        if (linux !== true && info.command.startsWith(`rm -rf -- '${remoteRoot}/`)) {
+          const relative = info.command.slice(`rm -rf -- '${remoteRoot}/`.length, -1)
+          assert.match(relative, /^(?:\.cache\/whycode-scratch\/|\.whycode\/skills\/\.whycode-sync-)[a-f0-9-]{36}$/u)
           assert.ok(info.command.endsWith("'"))
-          void rm(join(root, '.cache/whycode-scratch', id), { recursive: true, force: true })
+          void rm(join(root, relative), { recursive: true, force: true })
             .then(() => channel.exit(0), () => channel.exit(1)).finally(() => channel.end())
           return
         }
