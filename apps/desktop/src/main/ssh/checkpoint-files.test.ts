@@ -38,11 +38,11 @@ it('SFTP 读写流将断线传递为结果未知，将缺失路径传递为文�
   const fs = createSftpFileSystem({
     createReadStream: () => Readable.from((async function* () { throw disconnected() })()),
     createWriteStream: () => new Writable({ write(_chunk, _encoding, callback) { callback(disconnected()) } }),
-  } as unknown as SFTPWrapper)
+  } as unknown as SFTPWrapper, assert.fail)
   await assert.rejects(pipeline(fs.createReadStream('/file'), new Writable({ write(_chunk, _encoding, callback) { callback() } })), isUnknownWorkspaceOutcome)
   await assert.rejects(pipeline(Readable.from([Buffer.from('data')]), fs.createWriteStream('/file')), isUnknownWorkspaceOutcome)
   const missing = createSftpFileSystem({
     createWriteStream: () => new Writable({ write(_chunk, _encoding, callback) { callback(Object.assign(new Error('No such file'), { code: 2 })) } }),
-  } as unknown as SFTPWrapper)
+  } as unknown as SFTPWrapper, assert.fail)
   await assert.rejects(pipeline(Readable.from(['data']), missing.createWriteStream('/missing/file')), { code: 'ENOENT' })
 })

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join, posix } from 'node:path'
 import type { Client, ClientChannel } from 'ssh2'
-import type { WorkspaceFileSystem } from '@whycode/core'
+import { unknownWorkspaceOutcome, type WorkspaceFileSystem } from '@whycode/core'
 import { atomicSftpWrite } from './sftp.ts'
 import type { RemoteComponent } from './component.ts'
 
@@ -22,12 +22,17 @@ export async function removeRemoteEnvironment(client: Client, directory: string)
 export async function removeRemoteDirectory(client: Client, directory: string): Promise<void> {
   const channel = await execChannel(client, `rm -rf -- ${quoteShell(directory)}`)
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => { reject(new Error('远端目录清理超时，可重试清理')); channel.close() }, 120_000)
+    const timer = setTimeout(() => { reject(unknownWorkspaceOutcome('远端目录清理超时')); channel.close() }, 120_000)
     let diagnostic = ''
     channel.resume()
     channel.stderr.setEncoding('utf8').on('data', (text: string) => { diagnostic = (diagnostic + text).slice(-1024) })
-    channel.once('error', (error: Error) => { clearTimeout(timer); reject(error) })
-    channel.once('close', (code: number) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(diagnostic.trim() || '远端目录清理失败')) })
+    channel.once('error', (error: Error) => { clearTimeout(timer); reject(unknownWorkspaceOutcome(error.message)) })
+    channel.once('close', (code?: number) => {
+      clearTimeout(timer)
+      if (code === 0) resolve()
+      else if (typeof code === 'number') reject(new Error(diagnostic.trim() || '远端目录清理失败'))
+      else reject(unknownWorkspaceOutcome(diagnostic.trim() || '远端目录清理中断'))
+    })
   })
 }
 

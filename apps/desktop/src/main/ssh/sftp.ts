@@ -18,7 +18,7 @@ function normalizeStreamError(error: Error & { code?: number | string }): void {
   error.message = normalized.message
   error.code = normalized.code
 }
-export function createSftpFileSystem(sftp: SFTPWrapper): WorkspaceFileSystem {
+export function createSftpFileSystem(sftp: SFTPWrapper, removeDirectory: (path: string) => Promise<void>): WorkspaceFileSystem {
   const call = <T>(operation: (callback: (error: Error | undefined | null, result: T) => void) => void): Promise<T> => new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { reject(unknownWorkspaceOutcome('SSH 文件请求超时')); sftp.end() }, 30_000)
     try { operation((error, result) => { clearTimeout(timeout); error ? reject(fileError(error)) : resolve(result) }) }
@@ -88,11 +88,7 @@ export function createSftpFileSystem(sftp: SFTPWrapper): WorkspaceFileSystem {
         const stats = await io.lstat(path)
         if (stats.isDirectory()) {
           if (!options.recursive) throw new Error('不能将目录当作文件删除')
-          for (const entry of await io.readdir(path, { withFileTypes: true })) {
-            if (entry.name === '.' || entry.name === '..') continue
-            await io.rm(posix.join(path, entry.name), options)
-          }
-          await io.rmdir(path)
+          await removeDirectory(path)
         } else await io.unlink(path)
       } catch (error) { if (!options.force || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     },

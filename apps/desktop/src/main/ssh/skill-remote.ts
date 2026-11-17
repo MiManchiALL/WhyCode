@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { readBoundedWorkspaceFile, skillSummarySchema, type WorkspaceIO } from '@whycode/core'
 import type { SshReleaseOptions, SshSkillResult } from '../../shared/ssh-skills.ts'
-import { exists, ordinaryDirectory, pruneEmptyParents } from './config-files.ts'
-import { mapSkillFiles, skillTreeDigest, skillPath, SKILL_SYNC_MARKER, type SkillTree, type SkillWorkspaceIO } from './skill-files.ts'
+import { exists, FILE_CONCURRENCY, mapFileOperations, ordinaryDirectory, pruneEmptyParents } from './config-files.ts'
+import { skillTreeDigest, skillPath, SKILL_SYNC_MARKER, type SkillTree, type SkillWorkspaceIO } from './skill-files.ts'
 
 const markerSchema = skillSummarySchema.pick({ name: true, description: true }).extend({
   owner: z.literal('whycode-skill-sync'),
@@ -28,37 +28,45 @@ async function markerAt(io: WorkspaceIO, directory: string): Promise<SkillMarker
 }
 
 /** 扫描归属记录而非 SKILL.md，本机或远端正文已被删除的副本仍然可以清理。 */
-export async function managedSkills(io: SkillWorkspaceIO, home: string): Promise<ManagedSkill[]> {
+export async function managedSkills(io: SkillWorkspaceIO, home: string, selected?: readonly string[]): Promise<ManagedSkill[]> {
   const root = skillRoot(io, home)
-  if (!await ordinaryDirectory(io, root)) return []
-  const queue = [{ id: '', path: root, depth: 0 }]
   const result: ManagedSkill[] = []
+  let directories = ['']
   let entries = 0
-  for (let index = 0; index < queue.length; index++) {
-    const current = queue[index]!
-    if (current.id) {
-      const marker = await markerAt(io, current.path).catch(error => {
-        if (isStaging(current.id) && (error instanceof SyntaxError || error instanceof z.ZodError)) return null
-        throw error
-      })
-      if (marker) {
-        try { result.push({ id: current.id, marker, modified: await skillTreeDigest(io, current.path) !== marker.digest }) }
-        catch (error) { result.push({ id: current.id, marker, modified: true, error: error instanceof Error ? error.message : String(error) }) }
-        continue
+  for (let depth = 0; directories.length; depth++) {
+    // 包间和包内的目录读取共用八个 SFTP 名额。
+    const directoryConcurrency = Math.max(1, Math.floor(FILE_CONCURRENCY / directories.length))
+    const level = await mapFileOperations(directories, async (id): Promise<ManagedSkill | string[]> => {
+      const directory = id ? skillPath(root, id, io.path) : root
+      if (!await ordinaryDirectory(io, directory)) return []
+      if (id) {
+        const marker = await markerAt(io, directory).catch(error => {
+          if (isStaging(id) && (error instanceof SyntaxError || error instanceof z.ZodError)) return null
+          throw error
+        })
+        if (marker) {
+          try { return { id, marker, modified: await skillTreeDigest(io, directory, directoryConcurrency) !== marker.digest } }
+          catch (error) { return { id, marker, modified: true, error: error instanceof Error ? error.message : String(error) } }
+        }
+        if (isStaging(id)) return { id, marker: null, modified: true, error: '未完成的 Skill 操作，清理前需要确认' }
+        if (await exists(io.fs, io.path.join(directory, 'SKILL.md'))) return []
       }
-      if (isStaging(current.id)) {
-        result.push({ id: current.id, marker: null, modified: true, error: '未完成的 Skill 操作，清理前需要确认' })
-        continue
+      const children = await io.fs.readdir(directory, { withFileTypes: true })
+      entries += children.length
+      if (entries > 2000) throw new Error('远端 Skill 目录超过 2000 项，无法完整核对，请精简后重试')
+      if (depth >= 6) return []
+      const next: string[] = []
+      for (const entry of children) {
+        if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.name.startsWith('.') && !(depth === 0 && (entry.name === '.system' || isStaging(entry.name))))) continue
+        const child = id ? `${id}/${entry.name}` : entry.name
+        if (!selected || selected.some(key => key === child || key.startsWith(`${child}/`))) next.push(child)
       }
-      if (await exists(io.fs, io.path.join(current.path, 'SKILL.md'))) continue
-    }
-    for (const entry of await io.fs.readdir(current.path, { withFileTypes: true })) {
-      if (++entries > 2000) throw new Error('远端 Skill 目录超过 2000 项，无法完整核对，请精简后重试')
-      if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.name.startsWith('.') && !(current.depth === 0 && (entry.name === '.system' || isStaging(entry.name))))) continue
-      if (current.depth >= 6) continue
-      const id = current.id ? `${current.id}/${entry.name}` : entry.name
-      const directory = skillPath(root, id, io.path)
-      if (await ordinaryDirectory(io, directory)) queue.push({ id, path: directory, depth: current.depth + 1 })
+      return next
+    })
+    directories = []
+    for (const entry of level) {
+      if (Array.isArray(entry)) directories.push(...entry)
+      else result.push(entry)
     }
   }
   return result
@@ -77,9 +85,9 @@ export async function publishSkill(io: SkillWorkspaceIO, home: string, id: strin
     await io.fs.writeFile(io.path.join(staging, SKILL_SYNC_MARKER), JSON.stringify({ owner: 'whycode-skill-sync', name: metadata.name, description: metadata.description, digest: tree.digest }), { flag: 'wx', mode: 0o600 })
     // 同层目录及文件有界并发，VPN 下不让每个资源都串行等待一个往返。
     for (const depth of [...new Set(tree.directories.map(value => value.split('/').length))].sort((a, b) => a - b)) {
-      await mapSkillFiles(tree.directories.filter(value => value.split('/').length === depth), directory => io.fs.mkdir(io.path.join(staging, directory), { mode: 0o700 }))
+      await mapFileOperations(tree.directories.filter(value => value.split('/').length === depth), directory => io.fs.mkdir(io.path.join(staging, directory), { mode: 0o700 }))
     }
-    await mapSkillFiles(tree.files, file => io.fs.writeFile(io.path.join(staging, file.path), file.data, { flag: 'wx', mode: file.mode }))
+    await mapFileOperations(tree.files, file => io.fs.writeFile(io.path.join(staging, file.path), file.data, { flag: 'wx', mode: file.mode }))
     if (previous) {
       const marker = await markerAt(io, destination)
       if (!marker || marker.digest !== previous || await skillTreeDigest(io, destination) !== previous) throw new Error('远端 Skill 已变化，保留现有内容，请重新查看')
@@ -92,13 +100,15 @@ export async function publishSkill(io: SkillWorkspaceIO, home: string, id: strin
     throw error
   } finally {
     // 只删除本次创建的暂存路径；中断后仍可通过归属扫描列出并清理残留。
-    if (await exists(io.fs, staging)) await io.fs.rm(staging, { recursive: true })
-    if (!published) await pruneEmptyParents(io, io.path.dirname(destination), home)
+    if (!published) {
+      await io.fs.rm(staging, { recursive: true, force: true })
+      await pruneEmptyParents(io, io.path.dirname(destination), home)
+    }
   }
 }
 
 export async function cleanManagedSkills(io: SkillWorkspaceIO, home: string, options: SshReleaseOptions, ids?: string[], progress?: (result: SshSkillResult) => void): Promise<SshSkillResult[]> {
-  const all = await managedSkills(io, home)
+  const all = await managedSkills(io, home, ids)
   const selected = ids ? ids.map(id => {
     const entry = all.find(item => item.id === id)
     if (!entry) throw new Error(`Skill 不属于 WhyCode 同步副本：${id}`)
@@ -125,7 +135,7 @@ export async function cleanManagedSkills(io: SkillWorkspaceIO, home: string, opt
       const deleting = isStaging(entry.id) ? directory : temporaryPath(io, home)
       if (deleting !== directory) {
         await io.fs.rename(directory, deleting)
-        await pruneEmptyParents(io, io.path.dirname(directory), home)
+        await pruneEmptyParents(io, io.path.dirname(directory), root)
       }
       await io.fs.rm(deleting, { recursive: true })
       result = { id: entry.id, name, ok: true, message: '已清理' }
