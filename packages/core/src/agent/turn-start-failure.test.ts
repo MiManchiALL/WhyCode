@@ -18,7 +18,7 @@ import { inspectLatestTurnEdit } from './turn-edit.ts'
 
 it('项目指令读取失败结束已接收的回合，可以连续编辑重发并从磁盘恢复', async t => {
   const f = await fixture(t)
-  const read = t.mock.method(f.io.fs, 'readFile', async () => {
+  const read = t.mock.method(f.io.fs, 'open', async () => {
     throw new Error('工作区文件暂时不可读')
   })
 
@@ -60,7 +60,7 @@ it('项目指令读取失败结束已接收的回合，可以连续编辑重发�
 
 it('启动失败不会阻止后续普通输入完成和编辑，失败回合有持久终态', async t => {
   const f = await fixture(t)
-  const read = t.mock.method(f.io.fs, 'readFile', async () => { throw new Error('读取失败') })
+  const read = t.mock.method(f.io.fs, 'open', async () => { throw new Error('读取失败') })
   const failed = await f.send('第一次问题')
   assert.equal(failed.outcome, 'error')
   const failedTurn = f.latestTurnId()
@@ -87,7 +87,7 @@ it('读取项目指令期间停止后可检查最新消息，编辑重发失败�
   const f = await fixture(t)
   const reading = deferred()
   const release = deferred()
-  const read = t.mock.method(f.io.fs, 'readFile', async () => {
+  const read = t.mock.method(f.io.fs, 'open', async () => {
     reading.resolve()
     await release.promise
     throw new Error('读取期间连接断开')
@@ -133,7 +133,7 @@ it('取回的草稿不妨碍重发最新消息，保留到用户单独提交', a
   const f = await fixture(t)
   const reading = deferred()
   const release = deferred()
-  const read = t.mock.method(f.io.fs, 'readFile', async () => {
+  const read = t.mock.method(f.io.fs, 'open', async () => {
     reading.resolve()
     await release.promise
     throw new Error('读取失败')
@@ -168,7 +168,7 @@ it('取回的草稿不妨碍重发最新消息，保留到用户单独提交', a
 
 it('回合起点保存失败仍保留未交付输入，不读取工作区或调用模型', async t => {
   const f = await fixture(t)
-  const read = t.mock.method(f.io.fs, 'readFile', async () => { throw new Error('不应读取') })
+  const read = t.mock.method(f.io.fs, 'open', async () => { throw new Error('不应读取') })
   t.mock.method(f.journal, 'recordTurnStart', async () => { throw new Error('模拟日志写入失败') })
   const result = await f.send('待安全保存的输入')
   assert.equal(result.outcome, 'error')

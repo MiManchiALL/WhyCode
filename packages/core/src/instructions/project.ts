@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
 import type { ModelMessage } from 'ai'
 import { findProjectRoot } from '../project-root.ts'
+import { readBoundedWorkspaceFile, readWorkspaceBatches } from '../workspace/read.ts'
 
 const PROJECT_INSTRUCTIONS_RE = /^<system-reminder>\n<whycode-project-instructions version="(sha256:[a-f0-9]{64})">\n([\s\S]*)\n<\/whycode-project-instructions>\n<\/system-reminder>$/
 const DEFAULT_MAX_CONTENT_BYTES = 32 * 1024
@@ -30,26 +31,26 @@ export async function loadProjectInstructions(
   },
 ): Promise<ProjectInstructionsSnapshot | null> {
   const io = input.workspaceIO ?? localWorkspaceIO
+  const maxContentBytes = input.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES
+  if (!Number.isSafeInteger(maxContentBytes) || maxContentBytes < 0) throw new Error('项目指令内容上限必须是非负安全整数')
   const { join, resolve } = io.path
   const sources: InstructionSource[] = []
   if (input.homeDir) {
-    const global = await readOptionalFile(join(resolve(input.homeDir), '.whycode', 'AGENTS.md'), io)
+    const global = await readOptionalFile(join(resolve(input.homeDir), '.whycode', 'AGENTS.md'), io, maxContentBytes)
     if (global !== null) sources.push(global)
   }
   if (input.projectDir) {
     const selectedDir = resolve(input.projectDir)
     const projectRoot = await findProjectRoot(selectedDir, io)
-    for (const directory of directoriesBetween(projectRoot, selectedDir, io)) {
-      const source = await readDirectoryInstructions(directory, io)
-      if (source) sources.push(source)
+    const directories = directoriesBetween(projectRoot, selectedDir, io)
+    for await (const { result } of readWorkspaceBatches(directories, dir => readDirectoryInstructions(dir, io, maxContentBytes))) {
+      if (result.status === 'rejected') throw result.reason
+      if (result.value) sources.push(result.value)
     }
   }
   if (sources.length === 0) return null
 
-  const body = renderSources(
-    sources,
-    input.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES,
-  )
+  const body = renderSources(sources, maxContentBytes)
   const version = hash(body)
   return {
     version,
@@ -115,15 +116,17 @@ export function validateProjectInstructionsUpdate(
       && projectInstructionsVersion(update.message) === update.version
 }
 
-async function readDirectoryInstructions(directory: string, io: WorkspaceIO): Promise<InstructionSource | null> {
-  const override = await readOptionalFile(io.path.join(directory, 'AGENTS.override.md'), io)
+async function readDirectoryInstructions(directory: string, io: WorkspaceIO, maxBytes: number): Promise<InstructionSource | null> {
+  const override = await readOptionalFile(io.path.join(directory, 'AGENTS.override.md'), io, maxBytes)
   if (override !== null) return override
-  return readOptionalFile(io.path.join(directory, 'AGENTS.md'), io)
+  return readOptionalFile(io.path.join(directory, 'AGENTS.md'), io, maxBytes)
 }
 
-async function readOptionalFile(path: string, io: WorkspaceIO): Promise<InstructionSource | null> {
+async function readOptionalFile(path: string, io: WorkspaceIO, maxBytes: number): Promise<InstructionSource | null> {
   try {
-    return { path, content: await io.fs.readFile(path, 'utf8') }
+    // 多读一个完整码点，供合并时区分文件结束和预算截断。
+    const bytes = await readBoundedWorkspaceFile(path, maxBytes + 4, io, undefined, 'prefix')
+    return { path, content: bytes.toString('utf8') }
   } catch (error) {
     if (isNotFound(error)) return null
     throw error
@@ -144,9 +147,6 @@ function directoriesBetween(root: string, leaf: string, io: WorkspaceIO): string
 }
 
 function renderSources(sources: InstructionSource[], maxContentBytes: number): string {
-  if (!Number.isSafeInteger(maxContentBytes) || maxContentBytes < 0) {
-    throw new Error('项目指令内容上限必须是非负安全整数')
-  }
   let remaining = maxContentBytes
   const rendered = new Array<string>(sources.length)
   for (let index = sources.length - 1; index >= 0; index--) {

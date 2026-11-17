@@ -5,6 +5,7 @@ export const PREVIEW_SCHEME = 'whycode-preview'
 export const PREVIEW_SANDBOX = 'allow-scripts allow-same-origin'
 export const MAX_PREVIEW_VIEWS = 64
 export const DIRECTORY_PAGE_SIZE = 200
+export const MAX_DIRECTORY_READ = DIRECTORY_PAGE_SIZE * 16
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 export const MAX_DOCUMENT_PREVIEW_BYTES = 64 * 1024 * 1024
 
@@ -48,6 +49,7 @@ export interface OpenWorkspaceFileRequest {
 export interface ReadWorkspaceFileRequest {
   id: string
   offset?: number
+  limit?: number
 }
 
 export interface WorkspaceFileChange {

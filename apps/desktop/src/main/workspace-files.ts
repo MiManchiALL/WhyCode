@@ -10,9 +10,9 @@ import { WorkspaceFileWatch } from './workspace-file-watch.ts'
 import { boundedWebBody, fetchPublicWebResponse, WEB_DOCUMENT_TIMEOUT_MS, type WebDocumentFetcherOptions } from './web-page/network.ts'
 import { parseWebPageUrl } from './web-page/url-safety.ts'
 import {
-  DIRECTORY_PAGE_SIZE, MAX_DOCUMENT_PREVIEW_BYTES, MAX_PREVIEW_VIEWS,
+  DIRECTORY_PAGE_SIZE, MAX_DIRECTORY_READ, MAX_DOCUMENT_PREVIEW_BYTES, MAX_PREVIEW_VIEWS,
   MAX_TEXT_PREVIEW_BYTES, PREVIEW_SCHEME, PREVIEW_SANDBOX, documentFormat, previewMediaType,
-  type OpenWorkspaceFileRequest, type WorkspaceFileView,
+  type DirectoryEntry, type OpenWorkspaceFileRequest, type WorkspaceFileView,
 } from '../shared/workspace-files.ts'
 
 interface FileView {
@@ -25,6 +25,7 @@ interface FileView {
   path: string
   abort: AbortController
   watch: WorkspaceFileWatch
+  directoryPage?: { path: string; offset: number; total: number; entries: Pick<DirectoryEntry, 'name' | 'kind'>[] }
 }
 
 const byName = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
@@ -63,24 +64,34 @@ export class WorkspaceFiles {
     }
   }
 
-  async read(owner: number, id: string, offset = 0): Promise<WorkspaceFileView> {
+  async read(owner: number, id: string, offset = 0, limit = DIRECTORY_PAGE_SIZE): Promise<WorkspaceFileView> {
     const view = this.owned(owner, id)
     const { io } = view
     const { readdir, open, stat } = io.fs
     const { relative, resolve, sep, basename } = io.path
-    if (!Number.isInteger(offset) || offset < 0) throw new Error('目录读取位置无效')
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('目录读取位置无效')
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_DIRECTORY_READ) throw new Error('目录读取数量无效')
     if (view.kind === 'directory') {
       try {
+        if (offset === 0) view.directoryPage = undefined
         const path = await containedRealPath(io, view.root, view.path)
-        const entries = await readdir(path, { withFileTypes: true })
-        if (io.identity === 'local') view.watch.directory(path)
-        entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || byName.compare(a.name, b.name))
+        let page = view.directoryPage
+        if (!page || page.path !== path || offset < page.offset || Math.min(offset + limit, page.total) > page.offset + page.entries.length) {
+          const entries = await readdir(path, { withFileTypes: true })
+          if (io.identity === 'local') view.watch.directory(path)
+          entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || byName.compare(a.name, b.name))
+          const count = io.identity === 'local' ? limit : MAX_DIRECTORY_READ
+          page = { path, offset, total: entries.length, entries: entries.slice(offset, offset + count).map(entry => ({
+            name: entry.name, kind: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other',
+          })) }
+          view.directoryPage = io.identity !== 'local' && page.entries.length > limit ? page : undefined
+        }
+        const start = offset - page.offset
         return {
-          kind: 'directory', id, path: view.path, missing: false, total: entries.length,
-          entries: entries.slice(offset, offset + DIRECTORY_PAGE_SIZE).map(entry => ({
-            name: entry.name,
+          kind: 'directory', id, path: view.path, missing: false, total: page.total,
+          entries: page.entries.slice(start, start + limit).map(entry => ({
+            ...entry,
             path: relative(view.root, resolve(view.path, entry.name)).split(sep).join('/'),
-            kind: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other',
           })),
         }
       } catch (error) {
@@ -250,6 +261,7 @@ async function webImageResponse(image: string, web: WebDocumentFetcherOptions, s
 
 async function containedRealPath(io: WorkspaceIO, root: string, path: string): Promise<string> {
   const { realpath } = io.fs
+  if (root === path) return realpath(root)
   const [realRoot, realPath] = await Promise.all([realpath(root), realpath(path)])
   if (!isWithin(io, realRoot, realPath)) throw new Error('路径超出当前工作目录')
   return realPath

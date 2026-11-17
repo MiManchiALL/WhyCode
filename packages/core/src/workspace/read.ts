@@ -3,22 +3,32 @@ import { localWorkspaceIO, type WorkspaceIO } from './io.ts'
 const READ_CHUNK_BYTES = 64 * 1024
 const READ_CONCURRENCY = 8
 
+/** 按输入顺序交付一批已收束的读取。调用方达到预算后可停止，后续批次不会启动。 */
+export async function* readWorkspaceBatches<T, R>(items: readonly T[], read: (item: T) => Promise<R>) {
+  for (let start = 0; start < items.length; start += READ_CONCURRENCY) {
+    const batch = items.slice(start, start + READ_CONCURRENCY)
+    const results = await Promise.allSettled(batch.map(read))
+    for (const [index, result] of results.entries()) yield { item: batch[index]!, result }
+  }
+}
+
 /** 按打开的文件身份限量读取；远端短读与读取期间增长都不能突破预算。 */
 export async function readBoundedWorkspaceFile(
   path: string,
   maxBytes: number,
   io: WorkspaceIO = localWorkspaceIO,
   signal?: AbortSignal,
+  range: 'complete' | 'prefix' = 'complete',
 ): Promise<Buffer> {
   signal?.throwIfAborted()
   const file = await io.fs.open(path, 'r')
   try {
     const metadata = await file.stat()
     if (!metadata.isFile()) throw new Error(`路径必须指向普通文件：${path}`)
-    if (!Number.isSafeInteger(metadata.size) || metadata.size < 0 || metadata.size > maxBytes) {
+    if (!Number.isSafeInteger(metadata.size) || metadata.size < 0 || (range === 'complete' && metadata.size > maxBytes)) {
       throw new Error(`文件超过 ${maxBytes} 字节上限：${path}`)
     }
-    const bytes = Buffer.alloc(metadata.size)
+    const bytes = Buffer.alloc(Math.min(metadata.size, maxBytes))
     for (let start = 0; start < bytes.byteLength; start += READ_CHUNK_BYTES * READ_CONCURRENCY) {
       signal?.throwIfAborted()
       const count = Math.min(READ_CONCURRENCY, Math.ceil((bytes.byteLength - start) / READ_CHUNK_BYTES))
@@ -37,7 +47,7 @@ export async function readBoundedWorkspaceFile(
       if (failed?.status === 'rejected') throw failed.reason
     }
     signal?.throwIfAborted()
-    if ((await file.read(Buffer.alloc(1), 0, 1, metadata.size)).bytesRead) {
+    if (range === 'complete' && (await file.read(Buffer.alloc(1), 0, 1, metadata.size)).bytesRead) {
       throw new Error(`读取时文件发生变化：${path}`)
     }
     return bytes

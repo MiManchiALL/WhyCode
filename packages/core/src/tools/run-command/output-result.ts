@@ -3,6 +3,19 @@ import { z } from 'zod'
 export const COMMAND_PREVIEW_BYTES = 50 * 1024
 export const COMMAND_PREVIEW_LINES = 2_000
 
+export function commandTailPreview(tail: Buffer, startsAtLineBoundary: boolean): string {
+  let start = startsAtLineBoundary ? 0 : tail.indexOf(10) + 1
+  if (!startsAtLineBoundary && start === 0) return ''
+  let lines = 0
+  for (let index = tail.length - 1; index >= start; index--) {
+    if (tail[index] === 10 && index < tail.length - 1 && ++lines === COMMAND_PREVIEW_LINES) {
+      start = index + 1
+      break
+    }
+  }
+  return tail.subarray(start).toString('utf8')
+}
+
 const outputResultSchema = z.object({
   type: z.literal('command-output'),
   output: z.string(),

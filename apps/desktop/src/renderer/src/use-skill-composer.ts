@@ -40,6 +40,8 @@ interface UseSkillComposerOptions {
   modelId: string
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
+  sshAvailability: 'loading' | 'connected' | 'offline'
+  catalogVisible: boolean
   compactAvailable: boolean
   compactDisabled: boolean
   forkAvailable: boolean
@@ -59,7 +61,7 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
   const [trigger, setTrigger] = useState<SlashTrigger | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
   const selectedRef = useRef<SkillSummary[]>([])
-  const refreshSequenceRef = useRef(0)
+  const pendingCatalog = useRef<Promise<SkillCatalogSnapshot> | null>(null)
   const editorRef = useRef<ComposerInputHandle>(null)
 
   useEffect(() => {
@@ -110,48 +112,42 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     })
   }, [limitReached, matches, trigger])
 
+  const resetCatalog = useCallback(() => {
+    pendingCatalog.current = null
+    setCatalog(EMPTY_CATALOG)
+    setLoading(false)
+  }, [])
   const refresh = useCallback(async () => {
-    const targetRuntimeId = options.runtimeIdRef.current
-    if (!targetRuntimeId) return
-    const sequence = ++refreshSequenceRef.current
-    const isCurrent = () => options.runtimeIdRef.current === targetRuntimeId
-      && refreshSequenceRef.current === sequence
+    const target = options.runtimeId
+    if (!target || pendingCatalog.current || (options.workspaceMode === 'ssh' && options.sshAvailability === 'loading')) return
+    const request = window.whycode.listSkills(target)
+    pendingCatalog.current = request
+    const isCurrent = () => pendingCatalog.current === request && options.runtimeIdRef.current === target
     setLoading(true)
     try {
-      const next = await window.whycode.listSkills(targetRuntimeId)
+      const next = await request
       if (isCurrent()) setCatalog(next)
     } catch (error) {
-      if (!isCurrent()) return
-      setCatalog({
-        ...EMPTY_CATALOG,
-        diagnostics: [{
-          path: '',
-          message: `Skill 目录读取失败：${error instanceof Error ? error.message : String(error)}`,
-        }],
-      })
+      if (isCurrent()) setCatalog({ ...EMPTY_CATALOG, diagnostics: [{
+        path: '', message: `Skill 目录读取失败：${error instanceof Error ? error.message : String(error)}`,
+      }] })
     } finally {
-      if (isCurrent()) setLoading(false)
+      if (isCurrent()) { pendingCatalog.current = null; setLoading(false) }
     }
-  }, [options.runtimeIdRef])
-
-  useEffect(() => () => { refreshSequenceRef.current++ }, [])
+  }, [options.runtimeId, options.runtimeIdRef, options.workspaceMode, options.sshAvailability])
   useEffect(() => {
-    if (options.runtimeId) void refresh()
-  }, [
-    options.modelId,
-    options.projectDir,
-    options.runtimeId,
-    options.workspaceMode,
-    refresh,
-  ])
+    resetCatalog()
+    return () => { pendingCatalog.current = null }
+  }, [refresh, options.projectDir, options.modelId, resetCatalog])
 
+  const prefetch = options.workspaceMode !== 'ssh' || options.catalogVisible
+  useEffect(() => {
+    if (prefetch) void refresh()
+  }, [prefetch, refresh, options.projectDir, options.modelId])
   const menuOpen = trigger !== null
   useEffect(() => {
-    if (options.workspaceMode === 'ssh') return window.whycode.onSshChanged(() => { void refresh() })
-  }, [options.workspaceMode, refresh])
-  useEffect(() => {
     if (menuOpen) void refresh()
-  }, [menuOpen, refresh])
+  }, [menuOpen, refresh, options.projectDir, options.modelId])
 
   const updateMenu = useCallback((text: string, cursor: number | null) => {
     setTrigger(findSlashTrigger(text, cursor))
@@ -249,11 +245,6 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     return false
   }, [activeIndex, limitReached, matches, select, trigger])
 
-  const resetCatalog = useCallback(() => {
-    refreshSequenceRef.current++
-    setCatalog(EMPTY_CATALOG)
-    setLoading(false)
-  }, [])
   const closeMenu = useCallback(() => setTrigger(null), [])
 
   return {

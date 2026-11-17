@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import { Writable, type Readable } from 'node:stream'
 import { finished } from 'node:stream/promises'
 import type { WorkspaceIO } from '../../workspace/io.ts'
-import { COMMAND_PREVIEW_BYTES, COMMAND_PREVIEW_LINES } from './output-result.ts'
+import { commandTailPreview, COMMAND_PREVIEW_BYTES, COMMAND_PREVIEW_LINES } from './output-result.ts'
 
 /** 有界尾部与延迟落盘借鉴 Pi OutputAccumulator；写入由 Node 流背压控制。 */
 export class CommandOutput extends Writable {
@@ -34,16 +34,7 @@ export class CommandOutput extends Writable {
   get fullOutputPath(): string | undefined { return this.writableFinished && !this.errored ? this.filePath : undefined }
 
   preview(): string {
-    let start = this.tailStartsAtLineBoundary ? 0 : this.tail.indexOf(10) + 1
-    if (!this.tailStartsAtLineBoundary && start === 0) return ''
-    let lines = 0
-    for (let index = this.tail.length - 1; index >= start; index--) {
-      if (this.tail[index] === 10 && index < this.tail.length - 1 && ++lines === COMMAND_PREVIEW_LINES) {
-        start = index + 1
-        break
-      }
-    }
-    return this.tail.subarray(start).toString('utf8')
+    return commandTailPreview(this.tail, this.tailStartsAtLineBoundary)
   }
 
   override _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {

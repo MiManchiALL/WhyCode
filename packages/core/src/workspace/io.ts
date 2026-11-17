@@ -42,6 +42,14 @@ export interface WorkspaceFileSystem {
   chmod(path: string, mode: number): Promise<void>
 }
 
+export interface CapturedCommandOutput {
+  output: string
+  totalBytes: number
+  totalLines: number
+  fullOutputPath?: string
+  error?: string
+}
+
 export interface WorkspaceIO {
   /** Stable target identity, independent of display names and network reconnects. */
   readonly identity: string
@@ -49,6 +57,11 @@ export interface WorkspaceIO {
   readonly path: typeof path
   readonly fs: WorkspaceFileSystem
   spawn?: (command: string, cwd: string) => WorkspaceProcess
+  captureCommand?: (command: string, cwd: string, options: { directory?: string; maxBytes: number; maxLines: number; onProgress?: (text: string) => void }) =>
+    { process: WorkspaceProcess; result: Promise<CapturedCommandOutput> }
+  /** 定位逻辑行和 Unicode 列，只传回有界文本及判断下一行所需的前瞻。 */
+  readTextWindow?: (path: string, range: { offset: number; column: number; limit?: number; maxBytes: number },
+    signal: AbortSignal) => Promise<{ text: string } | { lines: number } | { columns: number } | { unreadable: 'not-file' | 'binary' }>
   /** 宿主提供的受管搜索程序；参数直接传递，不经过 shell。 */
   ripgrep?: (args: string[], cwd: string) => WorkspaceProcess
 }

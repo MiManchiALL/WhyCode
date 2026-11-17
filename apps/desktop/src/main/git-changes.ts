@@ -6,7 +6,7 @@ import { GitRepository } from './git-repository.ts'
 interface GitEntry extends GitFileChange { before: string; after: string; beforeMode: string; afterMode: string }
 interface ComparisonRange { args: string[]; working: boolean; untracked: boolean; label: string }
 
-async function comparisonRange(repo: GitRepository, info: GitRepositoryInfo, query: GitComparison): Promise<ComparisonRange> {
+async function comparisonRange(repo: GitRepository, query: GitComparison, info?: Pick<GitRepositoryInfo, 'branch' | 'head' | 'defaultBase'>): Promise<ComparisonRange> {
   if (query.mode === 'unstaged') return { args: [], working: true, untracked: true, label: '暂存区 → 工作区' }
   if (query.mode === 'staged') return { args: ['--cached'], working: false, untracked: false, label: 'HEAD → 暂存区' }
   if (query.mode === 'commit') {
@@ -15,10 +15,12 @@ async function comparisonRange(repo: GitRepository, info: GitRepositoryInfo, que
     const before = parents[1] ?? await emptyTree(repo)
     return { args: [before, commit], working: false, untracked: false, label: `${before.slice(0, 7)} → ${commit.slice(0, 7)}` }
   }
-  const base = query.mode === 'branch' ? query.baseRef ?? info.defaultBase : null
-  const before = base ? await repo.commit(base) : info.head ?? await emptyTree(repo)
-  return { args: [before], working: true, untracked: true,
-    label: base?.replace(/^refs\/(heads|remotes)\//u, '') ?? (info.head ? info.branch ?? 'HEAD' : '空仓库') }
+  if (query.mode === 'branch') {
+    const base = query.baseRef ?? (info ??= await repo.refs()).defaultBase
+    if (base) return { args: [await repo.commit(base)], working: true, untracked: true, label: base.replace(/^refs\/(heads|remotes)\//u, '') }
+  }
+  const head = info ? info.head : await repo.head()
+  return { args: [head ?? await emptyTree(repo)], working: true, untracked: true, label: head ? info?.branch ?? 'HEAD' : '空仓库' }
 }
 
 async function emptyTree(repo: GitRepository): Promise<string> {
@@ -26,7 +28,7 @@ async function emptyTree(repo: GitRepository): Promise<string> {
 }
 
 export async function readGitChanges(repo: GitRepository, info: GitRepositoryInfo, query: GitComparison): Promise<GitChanges> {
-  const range = await comparisonRange(repo, info, query)
+  const range = await comparisonRange(repo, query, info)
   const { entries, truncated } = await readEntries(repo, range)
   return {
     files: entries.map(({ before: _before, after: _after, beforeMode: _beforeMode, afterMode: _afterMode, ...file }) => file),
@@ -37,14 +39,16 @@ export async function readGitChanges(repo: GitRepository, info: GitRepositoryInf
   }
 }
 
-async function readEntries(repo: GitRepository, range: ComparisonRange): Promise<{ entries: GitEntry[]; truncated: boolean }> {
-  const result = await repo.run(['diff', '--raw', '--numstat', '-z', '--no-color', '--no-abbrev', '--find-renames', '-l200',
-    '--no-ext-diff', '--no-textconv', ...range.args, '--'], { outputLimit: 4 * 1024 * 1024 })
+const RAW_DIFF = ['diff', '--raw', '-z', '--no-color', '--no-abbrev', '--find-renames', '-l200', '--no-ext-diff', '--no-textconv']
+
+async function readEntries(repo: GitRepository, range: ComparisonRange, path?: string): Promise<{ entries: GitEntry[]; truncated: boolean }> {
+  const paths = path ? [path] : []
+  const result = await repo.run([...RAW_DIFF, ...(path ? [] : ['--numstat']), ...range.args, '--', ...paths], { outputLimit: 4 * 1024 * 1024 })
   requireGitSuccess(result, '读取变更清单')
   const entries = parseDiffEntries(result.stdout, repo)
   let truncated = result.outputTruncated || entries.length > GIT_MAX_FILES
-  if (range.untracked) {
-    const untracked = await repo.run(['ls-files', '--others', '--exclude-standard', '-z', '--'], { outputLimit: 1024 * 1024 })
+  if (range.untracked && (!path || !entries.length || entries[0]?.afterMode === '000000')) {
+    const untracked = await repo.run(['ls-files', '--others', '--exclude-standard', '-z', '--', ...paths], { outputLimit: 1024 * 1024 })
     requireGitSuccess(untracked, '读取未跟踪文件')
     truncated ||= untracked.outputTruncated
     const tracked = new Map(entries.map(file => [file.relativePath, file]))
@@ -92,15 +96,21 @@ function parseDiffEntries(raw: string, repo: GitRepository): GitEntry[] {
   return [...byPath.values()]
 }
 
-export async function readGitFilePreview(repo: GitRepository, info: GitRepositoryInfo, query: GitComparison, relativePath: string): Promise<GitFilePreview> {
+export async function readGitFilePreview(repo: GitRepository, query: GitComparison, relativePath: string): Promise<GitFilePreview> {
   const absolute = repo.io.path.resolve(repo.root, relativePath)
   const relative = repo.io.path.relative(repo.root, absolute)
   if (!relative || relative === '..' || relative.startsWith(`..${repo.io.path.sep}`) || repo.io.path.isAbsolute(relative)) {
     throw new Error('文件必须位于当前 Git 仓库内')
   }
-  const range = await comparisonRange(repo, info, query)
-  const { entries } = await readEntries(repo, range)
-  const file = entries.find(entry => entry.relativePath === relativePath)
+  const range = await comparisonRange(repo, query)
+  const { entries } = await readEntries(repo, range, relativePath)
+  let file = entries.find(entry => entry.relativePath === relativePath)
+  // 单路径的 diff 只能看到重命名的一侧。仅新增或删除时向 Git 核实跨路径的配对。
+  if (file?.status === 'A' || file?.status === 'D') {
+    const raw = await repo.text([...RAW_DIFF, '--diff-filter=R', ...range.args, '--'], '读取重命名', { outputLimit: 4 * 1024 * 1024 })
+    const rename = parseDiffEntries(raw, repo).find(entry => entry.relativePath === relativePath || entry.oldPath === relativePath)
+    if (rename) file = rename.relativePath === relativePath ? rename : undefined
+  }
   if (!file) throw new Error('该文件的变更已消失，请刷新列表')
   if (file.status === 'U') throw new Error('文件处于冲突状态，请打开当前文件解决冲突')
   const [before, after] = await Promise.all([

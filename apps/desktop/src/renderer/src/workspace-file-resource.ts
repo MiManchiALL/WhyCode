@@ -1,5 +1,5 @@
 import type { WhycodeApi } from '../../preload/index.ts'
-import type { OpenWorkspaceFileRequest, WorkspaceFileView } from '../../shared/workspace-files.ts'
+import { DIRECTORY_PAGE_SIZE, MAX_DIRECTORY_READ, type OpenWorkspaceFileRequest, type WorkspaceFileView } from '../../shared/workspace-files.ts'
 
 type FileApi = Pick<WhycodeApi, 'openWorkspaceFile' | 'readWorkspaceFile' | 'closeWorkspaceFile' | 'onWorkspaceFileChanged'>
 interface FileState {
@@ -90,9 +90,11 @@ export class WorkspaceFileResource {
   private async read(current: Lease, offset: number): Promise<WorkspaceFileView | null> {
     const previous = this.state.view
     const opening = current.id === null
+    const visible = offset === 0 && previous?.kind === 'directory'
+      ? Math.max(1, Math.ceil(previous.entries.length / DIRECTORY_PAGE_SIZE)) * DIRECTORY_PAGE_SIZE : DIRECTORY_PAGE_SIZE
     const result = opening
       ? await this.api.openWorkspaceFile(this.request)
-      : await this.api.readWorkspaceFile({ id: current.id!, offset })
+      : await this.api.readWorkspaceFile({ id: current.id!, offset, limit: Math.min(visible, MAX_DIRECTORY_READ) })
     if (!result.ok) throw new Error(result.error)
     if (this.lease !== current) {
       if (opening) this.api.closeWorkspaceFile(result.view.id)
@@ -103,8 +105,9 @@ export class WorkspaceFileResource {
     if (view.kind === 'directory' && previous?.kind === 'directory') {
       if (offset > 0) view = { ...view, entries: [...previous.entries, ...view.entries] }
       // 刷新完整替换已浏览的分页，避免第一批结果截短列表并把阅读位置拉回顶部。
-      while (offset === 0 && view.entries.length < Math.min(view.total, previous.entries.length)) {
-        const page = await this.api.readWorkspaceFile({ id: current.id, offset: view.entries.length })
+      while (offset === 0 && view.entries.length < Math.min(view.total, visible)) {
+        const page = await this.api.readWorkspaceFile({ id: current.id, offset: view.entries.length,
+          limit: Math.min(visible - view.entries.length, MAX_DIRECTORY_READ) })
         if (this.lease !== current) return null
         if (!page.ok) throw new Error(page.error)
         if (page.view.kind !== 'directory') throw new Error('目录读取结果无效')

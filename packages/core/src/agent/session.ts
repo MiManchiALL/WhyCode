@@ -495,6 +495,7 @@ export class AgentSession {
     model: ModelEntry,
     providerConfig: ProviderConfig,
     reasoningEffort: ReasoningEffortSelection,
+    usage: 'idle' | 'upcoming-request' = 'idle',
   ): Promise<void> {
     const modelChanged = this.options.model.id !== model.id
     if (modelChanged) await this.assertModelContextCapacity(model)
@@ -512,7 +513,7 @@ export class AgentSession {
       this.contextOverhead = null
       this.options.emit({ type: 'context-usage', usage: null })
     }
-    if (!this.activeModelSelection && (modelChanged || !this.contextOverhead)) {
+    if (usage === 'idle' && !this.activeModelSelection && (modelChanged || !this.contextOverhead)) {
       await this.initializeContextUsage()
     }
   }

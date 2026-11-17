@@ -94,6 +94,25 @@ it('按层读取目录、目录优先并自然排序，分页无重复；缺失�
   assert.equal(refreshed.kind === 'directory' && refreshed.missing, false)
 })
 
+it('SSH 目录翻页复用一次排序的目录清单，刷新重新列出并替换已展开的范围', async t => {
+  const { files, workspace } = await fixture(t)
+  await Promise.all(Array.from({ length: 420 }, (_, i) => writeFile(join(workspace, `file-${i}`), '')))
+  const list = t.mock.fn(localWorkspaceIO.fs.readdir)
+  const io = { ...localWorkspaceIO, identity: 'ssh:fixture', fs: { ...localWorkspaceIO.fs, readdir: list } }
+  const view = await files.open(1, { runtimeId: 'a', kind: 'directory', path: '' }, workspace, () => {}, io)
+  const second = await files.read(1, view.id, 200)
+  const third = await files.read(1, view.id, 400)
+  assert.equal(second.kind === 'directory' && second.entries[0]?.name, 'file-200')
+  assert.equal(third.kind === 'directory' && third.entries.length, 20)
+  assert.equal(list.mock.callCount(), 1)
+  await mkdir(join(workspace, 'new-folder'))
+  const refreshed = await files.read(1, view.id, 0, 600)
+  assert.equal(refreshed.kind === 'directory' && refreshed.entries.length, 421)
+  assert.equal(refreshed.kind === 'directory' && refreshed.entries[0]?.name, 'new-folder')
+  assert.equal(list.mock.callCount(), 2)
+  await assert.rejects(files.read(1, view.id, 0, Number.MAX_SAFE_INTEGER), /读取数量/)
+})
+
 it('预览类型、文本上限、未知二进制与特殊扩展名按真实文件判定', async t => {
   const { document } = await fixture(t)
   assert.equal((await document('test.MD', '# Test')).format, 'markdown')

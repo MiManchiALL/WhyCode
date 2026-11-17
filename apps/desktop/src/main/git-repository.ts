@@ -31,33 +31,47 @@ export class GitRepository {
     return (await this.text(['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], '读取提交')).trim()
   }
 
-  async info(): Promise<GitRepositoryInfo> {
-    const [head, branch, refsText, statusText, remotesText] = await Promise.all([
-      this.run(['rev-parse', '--verify', 'HEAD']),
+  async head(): Promise<string | null> {
+    const result = await this.run(['rev-parse', '--verify', '--quiet', 'HEAD'])
+    if (result.code === 1 && !result.timedOut) return null
+    return requireGitSuccess(result, '读取 HEAD').trim()
+  }
+
+  async refs() {
+    const [head, branch, refsText] = await Promise.all([
+      this.head(),
       this.run(['symbolic-ref', '--quiet', '--short', 'HEAD']),
       this.text(['for-each-ref', '--format=%(refname)%00%(symref)%00%(upstream)', 'refs/heads', 'refs/remotes'], '读取分支'),
+    ])
+    if (branch.timedOut) throw new Error('读取 Git 状态超时')
+    const branchName = branch.code === 0 ? branch.stdout.trim() : null
+    const refs = refsText.trimEnd().split('\n').filter(Boolean).map(line => line.split('\0'))
+    const upstream = refs.find(([ref]) => ref === `refs/heads/${branchName}`)?.[2] || null
+    return {
+      head, branch: branchName, upstream,
+      defaultBase: refs.some(([ref]) => ref === upstream) ? upstream
+        : branchName && head ? `refs/heads/${branchName}` : null,
+      refs: refs.filter(([, symbolic]) => !symbolic).map(([ref]) => ({
+        ref: ref!, name: ref!.replace(/^refs\/(heads|remotes)\//u, ''), remote: ref!.startsWith('refs/remotes/'),
+      })),
+    }
+  }
+
+  async info(): Promise<GitRepositoryInfo> {
+    const [refs, statusText, remotesText] = await Promise.all([
+      this.refs(),
       this.text(['status', '--porcelain=v1', '-z', '--untracked-files=all'], '读取工作区状态', { outputLimit: 4 * 1024 * 1024 }),
       this.text(['remote'], '读取远端'),
     ])
-    if (head.timedOut || branch.timedOut) throw new Error('读取 Git 状态超时')
-    const branchName = branch.code === 0 ? branch.stdout.trim() : null
-    const headCommit = head.code === 0 ? head.stdout.trim() : null
-    const refs = refsText.trimEnd().split('\n').filter(Boolean).map(line => line.split('\0'))
-    const upstream = refs.find(([ref]) => ref === `refs/heads/${branchName}`)?.[2] || null
     let ahead = 0, behind = 0
-    if (headCommit && upstream && refs.some(([ref]) => ref === upstream)) {
-      const counts = await this.text(['rev-list', '--left-right', '--count', `HEAD...${upstream}`], '读取同步状态')
+    if (refs.head && refs.upstream && refs.upstream === refs.defaultBase) {
+      const counts = await this.text(['rev-list', '--left-right', '--count', `HEAD...${refs.upstream}`], '读取同步状态')
       ;[ahead, behind] = counts.trim().split(/\s+/u).map(Number) as [number, number]
     }
     const entries = parsePorcelainStatus(statusText)
     return {
-      root: this.root, name: this.name, branch: branchName, head: headCommit, upstream, ahead, behind,
-      refs: refs.filter(([, symbolic]) => !symbolic).map(([ref]) => ({
-        ref: ref!, name: ref!.replace(/^refs\/(heads|remotes)\//u, ''), remote: ref!.startsWith('refs/remotes/'),
-      })),
+      root: this.root, name: this.name, ...refs, ahead, behind,
       remotes: remotesText.trim().split('\n').filter(Boolean),
-      defaultBase: refs.some(([ref]) => ref === upstream) ? upstream
-        : branchName && headCommit ? `refs/heads/${branchName}` : null,
       staged: entries.filter(entry => ![' ', '?'].includes(entry.code[0]!)).length,
       unstaged: entries.filter(entry => ![' ', '?'].includes(entry.code[1]!)).length,
       untracked: entries.filter(entry => entry.code === '??').length,

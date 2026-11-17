@@ -14,6 +14,12 @@ import { SshConnectionStore } from './store.ts'
 const { Server, utils } = ssh2
 
 export async function sshFixture(t: TestContext, linux: boolean | 'protocol' = false) {
+  if (linux === true && process.platform === 'win32') {
+    // 先启动测试服务器所在的虚拟机，SSH 超时从可接受命令的服务器开始计时。
+    const boot = spawn('wsl.exe', ['-d', 'Ubuntu', '--exec', '/bin/true'], { windowsHide: true, stdio: 'ignore' })
+    const [code] = await once(boot, 'close')
+    if (code !== 0) throw new Error('SSH 集成测试的 WSL Ubuntu 未就绪')
+  }
   const temporaryRoot = await realpath(tmpdir())
   const root = await mkdtemp(join(temporaryRoot, 'whycode-ssh-'))
   const remoteRoot = linux === 'protocol' ? '/home/fixture' : process.platform === 'win32' ? `/mnt/${root[0]!.toLowerCase()}${root.slice(2).replaceAll('\\', '/')}` : root
@@ -86,7 +92,7 @@ export async function sshFixture(t: TestContext, linux: boolean | 'protocol' = f
               buffer += chunk.toString()
               for (let end; (end = buffer.indexOf('\n')) >= 0;) {
                 const packet = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1)
-                channel.write(`${JSON.stringify({ id: packet.id, version: 2 })}\n`)
+                channel.write(`${JSON.stringify({ id: packet.id, version: 3 })}\n`)
               }
             })
           }

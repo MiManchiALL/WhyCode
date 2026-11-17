@@ -34,7 +34,7 @@ test('SSH 仓库通过正式远端进程读取差异、提交、切换与推送�
   assert.equal(info.branch, 'main')
   const changes = await readGitChanges(opened, info, { mode: 'uncommitted' })
   assert.equal(changes.files[0]?.relativePath, path)
-  const preview = await readGitFilePreview(opened, info, { mode: 'uncommitted' }, path)
+  const preview = await readGitFilePreview(opened, { mode: 'uncommitted' }, path)
   assert.equal(preview.before.kind === 'text' && preview.before.content, 'initial\n')
   assert.equal(preview.after.kind === 'text' && preview.after.content, 'changed\n')
   const name = "feature/it's-safe"

@@ -10,10 +10,12 @@ it('位置读取有界并发，处理短读且按原顺序返回字节', async (
   let active = 0
   let peak = 0
   let closed = false
+  let furthestRead = 0
   const reader: WorkspaceReader = {
     stat: async () => ({ size: source.length, mode: 0, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false }),
     read: async (buffer, offset, length, position) => {
       peak = Math.max(peak, ++active)
+      furthestRead = Math.max(furthestRead, position + length)
       await delay(1)
       const count = Math.min(length, 17_000, source.length - position)
       source.copy(buffer, offset, position, position + count)
@@ -26,6 +28,11 @@ it('位置读取有界并发，处理短读且按原顺序返回字节', async (
   assert.deepEqual(await readBoundedWorkspaceFile('image', source.length, io), source)
   assert.equal(peak, 8)
   assert.equal(closed, true)
+
+  furthestRead = 0
+  const prefix = await readBoundedWorkspaceFile('AGENTS.md', 32 * 1024 + 4, io, undefined, 'prefix')
+  assert.deepEqual(prefix, source.subarray(0, 32 * 1024 + 4))
+  assert.equal(furthestRead, prefix.length)
 
   reader.read = async () => { active++; await delay(1); active--; throw new Error('read failed') }
   await assert.rejects(readBoundedWorkspaceFile('image', source.length, io), /read failed/)

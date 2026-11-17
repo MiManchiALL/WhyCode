@@ -76,6 +76,19 @@ it('超时停止进程后排空并关闭日志，返回超时原因及日志路�
   assert.equal(await readFile(saved.fullOutputPath!, 'utf8'), text)
 })
 
+it('未能确认远端命令停止时返回结果未知，不等待无法交付的日志', { timeout: 3000 }, async () => {
+  const { child, io, context } = await setup()
+  const abort = new AbortController()
+  child.terminate = async () => false
+  io.captureCommand = () => ({ process: child, result: new Promise(() => {}) })
+  const result = runCommandTool.execute({ command: 'build' }, { ...context, abortSignal: abort.signal })
+  abort.abort('user-cancel')
+  const stopped = await result
+  assert.ok(stopped.isError)
+  assert.match(stopped.data, /未能确认全部子进程均已终止/u)
+  assert.match(stopped.data, /结果未知/u)
+})
+
 it('日志写入失败停止命令，错误不能伪装成成功或完整日志', async () => {
   const { child, context } = await setup()
   const file = new Writable({ write(_chunk, _encoding, callback) { callback(new Error('ENOSPC: disk full')) } })

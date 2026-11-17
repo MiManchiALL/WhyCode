@@ -27,7 +27,7 @@ export function registerGitIpc(
     const relativePath = z.string().min(1).max(4096).refine(value => !value.includes('\0')).parse(path)
     const repo = await repositoryFor(runtimeId)
     if (!repo) throw new Error('当前工作路径不是 Git 仓库')
-    return readGitFilePreview(repo, await repo.info(), comparison, relativePath)
+    return readGitFilePreview(repo, comparison, relativePath)
   }))
   ipcMain.handle(IPC.gitHistory, (event, id: unknown, value: unknown) => invoke(event, id, async runtimeId => {
     const skip = z.number().int().min(0).max(100_000).parse(value)

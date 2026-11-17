@@ -788,6 +788,7 @@ async function materializeWorkspace(runtime: DesktopSessionRuntime): Promise<Wor
 async function ensureSession(
   runtime: DesktopSessionRuntime,
   connection?: ResolvedModelConnection,
+  usage: 'idle' | 'upcoming-request' = 'idle',
 ): Promise<string | null> {
   if (!connection) {
     const resolved = resolveModelConnection(loadAppConfig(), resolveCurrentModelId(runtime))
@@ -803,7 +804,7 @@ async function ensureSession(
   if (runtime.session) {
     // 临时目录已随 AgentSession 初始化，后续输入只检查远端可用性。
     await sshWorkspaces.connect(runtime.workspace)
-    await runtime.session.setModelSelection(entry, providerConfig, runtime.reasoningEffort)
+    await runtime.session.setModelSelection(entry, providerConfig, runtime.reasoningEffort, usage)
   } else {
     if (!runtime.sessionInitialization) {
       let pending: Promise<string | null>
@@ -832,7 +833,7 @@ async function ensureSession(
             providerConfig,
             runtime.reasoningEffort,
           )
-          await runtime.session.initializeContextUsage()
+          if (usage === 'idle') await runtime.session.initializeContextUsage()
           runtime.coordinator = null
         }
         if (runtime.consensusEnabled && !runtime.coordinator) {
@@ -1097,7 +1098,7 @@ async function handleCommand(
           await sshWorkspaces.assertMessageAllowed(runtime.workspace)
           const resolved = resolveModelConnection(loadAppConfig(), resolveCurrentModelId(runtime))
           if (!resolved.ok) throw new Error(resolved.error)
-          const error = await ensureSession(runtime, resolved.value)
+          const error = await ensureSession(runtime, resolved.value, 'upcoming-request')
           if (error) throw new Error(error)
           synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
         },
@@ -1353,7 +1354,7 @@ async function handleEditUserMessageCommand(
     restoreFiles: command.target.restoreFiles === true,
     prepareSession: async () => {
       await sshWorkspaces.assertMessageAllowed(runtime.workspace)
-      const error = await ensureSession(runtime)
+      const error = await ensureSession(runtime, undefined, 'upcoming-request')
       if (error) throw new Error(error)
       synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
     },
@@ -1373,7 +1374,7 @@ async function prepareUserMessage(
     const skillsBeforeSession = runtime.projectDir === null
       ? await prepareUserMessageSkills(runtime, command, model)
       : null
-    const error = await ensureSession(runtime, connection)
+    const error = await ensureSession(runtime, connection, 'upcoming-request')
     if (error) throw new Error(error)
     synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, config)
     return {
@@ -1390,7 +1391,7 @@ async function prepareUserMessage(
     : null
   const attachmentAbortSignal = runtime.beginAttachmentPreparation()
   try {
-    const error = await ensureSession(runtime, connection)
+    const error = await ensureSession(runtime, connection, 'upcoming-request')
     if (error) throw new Error(error)
     synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, config)
     const preparedSkills = skillsBeforeSession ?? await prepareUserMessageSkills(runtime, command, model)

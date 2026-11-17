@@ -1,6 +1,7 @@
 import { localWorkspaceIO, type WorkspaceIO, type WorkspaceDirent } from '../workspace/io.ts'
 import { join, resolve } from 'node:path'
 import { parseDocument } from 'yaml'
+import { readWorkspaceBatches } from '../workspace/read.ts'
 import {
   type SubagentDefinitionCatalogSnapshot,
   type SubagentDefinitionDiagnostic,
@@ -103,35 +104,33 @@ export class SubagentDefinitionCatalogService {
         .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
         .sort((left, right) => left.name.localeCompare(right.name))
         .slice(0, MAX_AGENT_FILES_PER_ROOT)
-      for (const file of files) {
-        const path = root.io.path.join(root.path, file.name)
-        try {
-          const definition = await loadCustomDefinition(path, root.scope, root.io)
-          const cost = Buffer.byteLength(definition.instructions, 'utf8')
-          if (loadedBytes + cost > MAX_AGENT_BYTES_PER_ROOT) {
-            diagnostics.push({
-              path: root.path,
-              message: `Agent 定义正文达到 ${MAX_AGENT_BYTES_PER_ROOT} 字节总预算，后续项已省略`,
-            })
-            break
-          }
-          loadedBytes += cost
-          const previous = definitions.get(definition.name)
-          if (previous || conflicts.has(definition.name)) {
-            diagnostics.push({ path, message: `子代理 name 重复：${definition.name}${previous ? `（已存在于 ${previous.sourcePath ?? '内置目录'}）` : ''}` })
-            if (previous?.scope !== 'builtin') {
-              definitions.delete(definition.name)
-              conflicts.add(definition.name)
-            }
-            continue
-          }
-          definitions.set(definition.name, definition)
-        } catch (error) {
-          diagnostics.push({
-            path,
-            message: error instanceof Error ? error.message : String(error),
-          })
+      const paths = files.map(file => root.io.path.join(root.path, file.name))
+      for await (const { item: path, result } of readWorkspaceBatches(paths, path => loadCustomDefinition(path, root.scope, root.io))) {
+        if (result.status === 'rejected') {
+          const error: unknown = result.reason
+          diagnostics.push({ path, message: error instanceof Error ? error.message : String(error) })
+          continue
         }
+        const definition = result.value
+        const cost = Buffer.byteLength(definition.instructions, 'utf8')
+        if (loadedBytes + cost > MAX_AGENT_BYTES_PER_ROOT) {
+          diagnostics.push({
+            path: root.path,
+            message: `Agent 定义正文达到 ${MAX_AGENT_BYTES_PER_ROOT} 字节总预算，后续项已省略`,
+          })
+          break
+        }
+        loadedBytes += cost
+        const previous = definitions.get(definition.name)
+        if (previous || conflicts.has(definition.name)) {
+          diagnostics.push({ path, message: `子代理 name 重复：${definition.name}${previous ? `（已存在于 ${previous.sourcePath ?? '内置目录'}）` : ''}` })
+          if (previous?.scope !== 'builtin') {
+            definitions.delete(definition.name)
+            conflicts.add(definition.name)
+          }
+          continue
+        }
+        definitions.set(definition.name, definition)
       }
       if (entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length > files.length) {
         diagnostics.push({

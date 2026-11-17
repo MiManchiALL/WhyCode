@@ -93,7 +93,7 @@ describe('输入框 Skill 目录刷新', () => {
     assert.equal(page.current.loading, false)
     assert.equal(page.current.catalog.diagnostics[0]?.message, '连接 SSH 后可使用远端 Skill')
 
-    await act(async () => { for (const listener of page.listeners) listener() })
+    await page.setConnection('connected')
     assert.equal(page.current.loading, true)
     assert.equal(page.requests[1]?.runtimeId, 'ssh-session')
     await act(async () => page.requests[1]!.resolve(connectedCatalog))
@@ -121,18 +121,20 @@ describe('输入框 Skill 目录刷新', () => {
     assert.equal(page.current.matches.filter(item => item.kind === 'skill').length, 0)
   })
 
-  it('连接变化和菜单读取交错时，旧结果和旧失败不能结束最新读取或覆盖目录', async t => {
-    const page = await composerFixture(t)
+  it('普通 SSH 历史按需读取，打开菜单复用当前查询，断线后忽略迟到结果', async t => {
+    const page = await composerFixture(t, false)
+    assert.equal(page.requests.length, 0)
+    await page.setConnection('connected')
+    assert.equal(page.requests.length, 0)
     await act(async () => page.current.updateMenu('/', 1))
-    await act(async () => page.requests[0]!.resolve(disconnectedCatalog))
-    assert.equal(page.current.loading, true)
-    assert.equal(page.current.catalog.diagnostics.length, 0)
-    await act(async () => { for (const listener of page.listeners) listener() })
-    await act(async () => page.requests[2]!.resolve(connectedCatalog))
-    await act(async () => page.requests[1]!.reject(new Error('旧连接已断开')))
+    await act(async () => page.current.updateMenu('', 0))
+    await act(async () => page.current.updateMenu('/', 1))
+    assert.equal(page.requests.length, 1)
+    await page.setConnection('offline')
+    await act(async () => page.requests[1]!.resolve(disconnectedCatalog))
+    await act(async () => page.requests[0]!.resolve(connectedCatalog))
     assert.equal(page.current.loading, false)
-    assert.deepEqual(page.current.catalog.skills, connectedCatalog.skills)
-    assert.equal(page.current.catalog.diagnostics.length, 0)
+    assert.deepEqual(page.current.catalog, disconnectedCatalog)
   })
 
   it('读取失败结束加载；切换会话后忽略旧请求并清除旧读取状态', async t => {
@@ -163,22 +165,17 @@ const connectedCatalog: SkillCatalogSnapshot = {
   }],
 }
 
-async function composerFixture(t: TestContext) {
+async function composerFixture(t: TestContext, catalogVisible = true) {
   const { window, document } = parseHTML('<html><body></body></html>')
   const requests: Array<{
     runtimeId: string
     resolve: (catalog: SkillCatalogSnapshot) => void
     reject: (error: Error) => void
   }> = []
-  const listeners = new Set<() => void>()
   Object.defineProperty(window, 'whycode', { value: {
     listSkills: (runtimeId: string) => new Promise<SkillCatalogSnapshot>((resolve, reject) => {
       requests.push({ runtimeId, resolve, reject })
     }),
-    onSshChanged: (listener: () => void) => {
-      listeners.add(listener)
-      return () => { listeners.delete(listener) }
-    },
   }, configurable: true })
   const globals = { window, document, IS_REACT_ACT_ENVIRONMENT: true,
     requestAnimationFrame: (callback: FrameRequestCallback) => { callback(0); return 0 },
@@ -192,12 +189,11 @@ async function composerFixture(t: TestContext) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor)
       else Reflect.deleteProperty(globalThis, key)
     }
-    assert.equal(listeners.size, 0)
   })
   const options: Parameters<typeof useSkillComposer>[0] = {
     input: new ComposerText(),
     runtimeId: 'ssh-session', runtimeIdRef: { current: 'ssh-session' },
-    modelId: '', projectDir: '/home/test', workspaceMode: 'ssh', skillsEnabled: true,
+    modelId: '', projectDir: '/home/test', workspaceMode: 'ssh', skillsEnabled: true, sshAvailability: 'offline', catalogVisible,
     compactAvailable: false, compactDisabled: false, forkAvailable: false, forkDisabled: false,
     btwAvailable: false, bbtwAvailable: false, onCommand: () => {},
   }
@@ -205,7 +201,11 @@ async function composerFixture(t: TestContext) {
   function Composer() { current = useSkillComposer(options); return null }
   await act(async () => root.render(createElement(Composer)))
   return {
-    get current() { return current }, input: options.input, requests, listeners,
+    get current() { return current }, input: options.input, requests,
+    setConnection: (status: typeof options.sshAvailability) => act(async () => {
+      options.sshAvailability = status
+      root.render(createElement(Composer))
+    }),
     switchRuntime: (runtimeId: string) => act(async () => {
       options.runtimeId = runtimeId; options.runtimeIdRef.current = runtimeId
       current.resetCatalog(); current.closeMenu()

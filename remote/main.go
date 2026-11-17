@@ -18,32 +18,34 @@ import (
 	"github.com/creack/pty"
 )
 
-const protocol = 2
+const protocol = 3
 const maxTasks = 32
 
 type request struct {
-	ID         string   `json:"id"`
-	Method     string   `json:"method"`
-	Task       string   `json:"task"`
-	Command    string   `json:"command"`
-	Executable string   `json:"executable"`
-	Args       []string `json:"args"`
-	Cwd        string   `json:"cwd"`
-	Data       []byte   `json:"data"`
-	PTY        bool     `json:"pty"`
-	Cols       uint16   `json:"cols"`
-	Rows       uint16   `json:"rows"`
-	End        bool     `json:"end"`
+	ID         string          `json:"id"`
+	Method     string          `json:"method"`
+	Task       string          `json:"task"`
+	Command    string          `json:"command"`
+	Executable string          `json:"executable"`
+	Args       []string        `json:"args"`
+	Cwd        string          `json:"cwd"`
+	Data       []byte          `json:"data"`
+	PTY        bool            `json:"pty"`
+	Cols       uint16          `json:"cols"`
+	Rows       uint16          `json:"rows"`
+	End        bool            `json:"end"`
+	Capture    *captureOptions `json:"capture"`
 }
 type response struct {
-	ID      string `json:"id,omitempty"`
-	Task    string `json:"task,omitempty"`
-	Event   string `json:"event,omitempty"`
-	Data    []byte `json:"data,omitempty"`
-	Stream  string `json:"stream,omitempty"`
-	Code    *int   `json:"code,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Version int    `json:"version,omitempty"`
+	ID      string         `json:"id,omitempty"`
+	Task    string         `json:"task,omitempty"`
+	Event   string         `json:"event,omitempty"`
+	Data    []byte         `json:"data,omitempty"`
+	Stream  string         `json:"stream,omitempty"`
+	Code    *int           `json:"code,omitempty"`
+	Error   string         `json:"error,omitempty"`
+	Version int            `json:"version,omitempty"`
+	Capture *captureResult `json:"capture,omitempty"`
 }
 type task struct {
 	cmd          *exec.Cmd
@@ -55,6 +57,7 @@ type task struct {
 	outputSlots  chan struct{}
 	cancelOutput chan struct{}
 	outputOnce   sync.Once
+	capture      *commandCapture
 }
 type server struct {
 	mu       sync.Mutex
@@ -67,6 +70,13 @@ type server struct {
 
 func main() {
 	if len(os.Args) > 1 {
+		if os.Args[1] == "read-text" {
+			if err := readTextWindow(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
 		if len(os.Args) != 4 || os.Args[1] != "copy-scratch" {
 			fmt.Fprintln(os.Stderr, "invalid scratch copy arguments")
 			os.Exit(2)
@@ -212,6 +222,16 @@ func (s *server) start(r request) response {
 	cmd.Dir = r.Cwd
 	cmd.Env = append(os.Environ(), "PAGER=cat", "GIT_PAGER=cat")
 	t := &task{cmd: cmd, done: make(chan struct{}), outputSlots: make(chan struct{}, 8), cancelOutput: make(chan struct{})}
+	if r.Capture != nil {
+		if r.PTY || r.Executable != "" {
+			return response{Error: "仅前台命令可收集日志"}
+		}
+		capture, err := newCapture(*r.Capture, r.Task)
+		if err != nil {
+			return response{Error: err.Error()}
+		}
+		t.capture = capture
+	}
 	var readers []io.ReadCloser
 	var writers []*os.File
 	var err error
@@ -273,13 +293,19 @@ func (s *server) start(r request) response {
 		if index == 1 {
 			stream = "stderr"
 		}
-		go func(reader io.ReadCloser, stream string) { defer outputs.Done(); s.read(r.Task, t, reader, stream) }(reader, stream)
+		go func(reader io.ReadCloser, stream string) {
+			defer outputs.Done()
+			if t.capture != nil {
+				s.readCaptured(r.Task, t, reader)
+			} else {
+				s.read(r.Task, t, reader, stream)
+			}
+		}(reader, stream)
 	}
 	go func() {
 		// Wait on the process first; its descendants must not hold the channel open forever.
 		err := cmd.Wait()
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		close(t.done)
 		outputs.Wait()
 		for _, reader := range readers {
 			reader.Close()
@@ -288,12 +314,17 @@ func (s *server) start(r request) response {
 		if err != nil {
 			code = cmd.ProcessState.ExitCode()
 		}
+		exit := response{Task: r.Task, Event: "exit", Code: &code}
+		if t.capture != nil {
+			exit.Capture = t.capture.finish()
+		}
+		close(t.done)
 		s.mu.Lock()
 		delete(s.tasks, r.Task)
 		s.mu.Unlock()
 		// Exit shares the data queue so consumers observe all accepted output first.
 		select {
-		case s.output <- response{Task: r.Task, Event: "exit", Code: &code}:
+		case s.output <- exit:
 		case <-s.closing:
 		}
 	}()
@@ -304,27 +335,30 @@ func (s *server) read(id string, t *task, reader io.Reader, stream string) {
 	buffer := make([]byte, 16*1024)
 	for {
 		n, err := reader.Read(buffer)
-		if n > 0 {
-			// Each consumer grants its own output window; a paused terminal cannot block other tasks.
-			select {
-			case t.outputSlots <- struct{}{}:
-			case <-t.cancelOutput:
-				return
-			case <-s.closing:
-				return
-			}
-			data := append([]byte(nil), buffer[:n]...)
-			select {
-			case s.output <- response{Task: id, Event: "data", Data: data, Stream: stream}:
-			case <-s.closing:
-				return
-			case <-t.cancelOutput:
-				return
-			}
+		if n > 0 && !s.sendData(id, t, buffer[:n], stream) {
+			return
 		}
 		if err != nil {
 			return
 		}
+	}
+}
+
+func (s *server) sendData(id string, t *task, data []byte, stream string) bool {
+	select {
+	case t.outputSlots <- struct{}{}:
+	case <-t.cancelOutput:
+		return false
+	case <-s.closing:
+		return false
+	}
+	select {
+	case s.output <- response{Task: id, Event: "data", Data: append([]byte(nil), data...), Stream: stream}:
+		return true
+	case <-t.cancelOutput:
+		return false
+	case <-s.closing:
+		return false
 	}
 }
 
