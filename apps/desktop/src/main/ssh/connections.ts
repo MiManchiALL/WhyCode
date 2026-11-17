@@ -10,6 +10,7 @@ import { createSftpFileSystem } from './sftp.ts'
 import { execChannel, provisionRemote, quoteShell, removeRemoteDirectory, removeRemoteEnvironment } from './provision.ts'
 import { cleanupRemoteComponent, prepareRemoteComponent, readComponentIdentity, type RemoteComponent } from './component.ts'
 import { RemoteProcessHost } from './process.ts'
+import { remoteTextReader } from './read-text.ts'
 import type { SshReleaseOptions } from '../../shared/ssh-skills.ts'
 import { cleanManagedSkills } from './skill-remote.ts'
 import { remoteSkillIO } from './skill-files.ts'
@@ -177,6 +178,8 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
       const io: WorkspaceIO = {
         identity: target, platform: 'linux', path: path.posix, fs,
         spawn: (command, cwd) => processes.spawn(command, cwd),
+        readTextWindow: remoteTextReader(processes, installed.executable),
+        captureCommand: processes.captureCommand,
         ripgrep: (args, cwd) => processes.spawn({ executable: installed.ripgrep, args }, cwd),
       }
       const host: ConnectedHost = { client, io, home, target, processes, component, executable: installed.executable }
@@ -212,6 +215,8 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
     return {
       identity: target, platform: 'linux', path: path.posix, fs,
       spawn: (command, cwd) => this.targetHost(target).processes.spawn(command, cwd),
+      readTextWindow: (path, range, signal) => this.targetHost(target).io.readTextWindow!(path, range, signal),
+      captureCommand: (command, cwd, options) => this.targetHost(target).processes.captureCommand(command, cwd, options),
       ripgrep: (args, cwd) => this.targetHost(target).io.ripgrep!(args, cwd),
     }
   }

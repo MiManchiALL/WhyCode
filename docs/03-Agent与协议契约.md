@@ -136,7 +136,7 @@ System 只包含会话内稳定内容：
 
 `ContextUsageInfo` 只描述当前 Main：`usedTokens/contextWindow` 驱动圆环，`autoCompactThreshold` 表示下一次模型请求前的压缩边界，`breakdown.systemPromptTokens/toolTokens/messageTokens` 提供近似解释。`messageTokens` 的语义是此刻模型请求中可见的 messages：真实请求已经装配时按 Provider 边界副本估算，空闲时投影下一次普通请求。普通 Main 的子代理目录基线、待追加增量与 Skill 目录属于该投影；活动 Skill 正文、当前根任务保留的 Skill 结果和子代理 turn 状态只在各自有效期内计入，根任务结束后必须消失。内部 MCP 状态不发给模型，因此在消息分项与总量中均不计入。
 
-工具分项与模型请求共用工具组装。初始化和冷恢复计入当前可用的内置工具、`ToolSearch` 与已解析的 MCP schema；SSH 等工作区能力差异按实际可用工具体现，不使用固定 token 常量。空闲计量只读取 MCP 目录快照，不启动或连接服务；冷恢复中尚未重新解析的 MCP 工具在真实请求恢复成功后、压缩判断前计入。实际检索、目录变化、模型能力变化可以改变工具用量，单纯开始或结束回复不应遗漏同一组工具。
+工具分项与模型请求共用工具组装。准备发送普通消息时，用首次实际请求的快照计量上下文，省去一次空闲预估。初始化和冷恢复计入当前可用的内置工具、`ToolSearch` 与已解析的 MCP schema；SSH 等工作区能力差异按实际可用工具体现，不使用固定 token 常量。空闲计量只读取 MCP 目录快照，不启动或连接服务；冷恢复中尚未重新解析的 MCP 工具在真实请求恢复成功后、压缩判断前计入。实际检索、目录变化、模型能力变化可以改变工具用量，单纯开始或结束回复不应遗漏同一组工具。
 
 `details` 在相同计量中按请求组成拆分，不携带正文。System 分为内置与自定义提示词，使用会话冻结的自定义快照及模式；覆盖模式下内置用量为零。工具分为内置工具与实际工具数组中的已加载 MCP schema，`ToolSearch` 属于内置工具。消息只分出请求顶部依次出现的 AGENTS.md、子代理目录基线与 Skill 目录，剩余消息统一计为上下文；后续子代理目录增量、已激活 Skill 和 Browser 指引均保留在上下文，不按来源重新归类。各明细之和等于所属 `breakdown` 分项。
 
@@ -608,7 +608,7 @@ canonical 消息的 `whycode` 元数据保存正式用户 turn 身份及有界�
 类型与边界单源为 `apps/desktop/src/shared/workspace-files.ts`，实现位于 Main 的 `workspace-files.ts` 与 `workspace-files-ipc.ts`。仅所属窗口的主 Frame 可创建、读取、关闭、定位或用默认应用打开文件视图：
 
 - `openWorkspaceFile({runtimeId,kind,path})` 从运行时解析工作目录。目录路径相对工作目录；文件使用明确打开的绝对路径，目录外文件的静态资源范围限于其父目录。返回一次性视图 ID、目录项或文档元数据及预览地址，不通过 IPC 返回正文。
-- `readWorkspaceFile({id,offset?})` 只接受当前窗口持有的视图；目录每页最多 200 项，每个窗口最多 64 个活动视图。目录项区分目录、普通文件和不可浏览的链接/特殊项。
+- `readWorkspaceFile({id,offset?,limit?})` 只接受当前窗口持有的视图，每个窗口最多 64 个活动视图。目录默认每页 200 项，刷新已展开列表时每次最多读取 3200 项。SSH 视图在该上限内复用同一次排序后的目录清单，从头刷新时重新列目录。目录项区分目录、普通文件和不可浏览的链接或特殊项。
 - `checkWorkspaceFile(id)` 校验所属窗口的活动文件视图、真实路径范围与普通文件状态，返回 `{ok:true}` 或 `{ok:false,error}`；不读取正文、生成新预览地址或重置监听。缺失文件统一显示“当前文件已被删除或移动”；系统打开与文件夹定位同样在执行前校验，不能仅凭旧视图元数据执行。
 - `workspaceFileChanged({id})` 只发给资源所属窗口；文件视图仅在正文或已读取依赖的版本改变时通知，目录视图按目录变化通知。`closeWorkspaceFile(id)` 幂等释放资源，`revealWorkspaceFile(id)` 在系统文件夹定位已打开的路径，`openWorkspaceFileExternally(id)` 用系统默认应用打开该路径并返回失败原因；两者只接受所属窗口的活动视图 ID，不接受 Renderer 提供的原始路径。视图 ID 与预览地址均不持久化。
 - `saveWorkspaceFile(id)` 只保存当前窗口的活动文件视图，由 Main 的系统保存对话框选择本机目标，取消返回 false。内容流式写入目标旁的排他暂存文件，完成且字节数符合读取前尺寸后才替换目标；关闭视图、传输失败或尺寸变化清理暂存并保留原目标。Renderer 不能直接提交任意本机写入路径。
@@ -661,7 +661,9 @@ Skill 管理契约由 `shared/ssh-skills.ts` 定义，沿用 `ssh(request)`，�
 
 SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。连接管理、所有权与清理语义见文档二 §7.5。
 
-远端组件只通过已有 SSH channel 的标准输入输出交换协议 2 的 JSONL。请求带 `id`；进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`；异步事件为 `data` 与 `exit`。`start` 使用 `command` 通过 `/bin/sh -c` 执行用户命令，或使用宿主提供的绝对 `executable` 与 `args` 直接启动搜索程序；两者均指定绝对工作目录，直接执行不支持 PTY。字节使用 base64，非 PTY 的 `data.stream` 始终区分 stdout/stderr，避免不同流的半个 UTF-8 字符在解码前混合；前台和后台命令分别解码后合并输出与日志，原生搜索分别消费结果和诊断。PTY 由终端合并输出。前台关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，不承诺控制命令自行脱离的守护进程。
+远端组件通过已有 SSH channel 的标准输入输出交换协议 3 的 JSONL。请求带 `id`，进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`，异步事件为 `data` 与 `exit`。`start` 指定绝对工作目录，通过 `command` 交给 `/bin/sh -c`，或用绝对 `executable` 与 `args` 启动宿主程序。直接执行使用非 PTY 模式。原始字节用 base64 编码，非 PTY 数据标明 stdout 或 stderr，PTY 合并输出。前台关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，命令自行脱离的守护进程由其自行管理。
+
+前台命令的 `start.capture` 指定临时目录、预览上限和是否需要实时进度。组件独立解码两路输出后合并，按需发送进度。`exit.capture` 返回有界尾部、行边界、总字节和行数，以及完整日志的保存结果。保存成功后，Main 根据临时目录和进程 ID 生成日志路径。
 
 单组件最多 32 个进程，单请求行不超过 1 MiB；Main 同时等待的请求最多 64 个，12 秒未响应则关闭通道并报告结果未知。每 15 秒心跳，组件超过 75 秒未收到有效心跳后在定时检查中退出。输出按 16 KiB 分块，每个进程最多 8 个未消费块；消费后发 `ack`，暂停某个终端不会堵塞其它任务、停止或心跳。SFTP 单操作超时为 30 秒；断线后的旧请求不会自动重放。
 

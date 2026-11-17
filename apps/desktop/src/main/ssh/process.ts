@@ -2,14 +2,20 @@ import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { PassThrough, Writable } from 'node:stream'
 import type { ClientChannel } from 'ssh2'
+import { posix } from 'node:path'
 import { z } from 'zod'
-import { unknownWorkspaceOutcome, type WorkspaceProcess } from '@whycode/core'
+import { commandTailPreview, COMMAND_PREVIEW_BYTES } from '@whycode/core/command-output'
+import { unknownWorkspaceOutcome, type CapturedCommandOutput, type WorkspaceIO, type WorkspaceProcess } from '@whycode/core'
 
 const packetSchema = z.object({
   id: z.string().optional(), task: z.string().optional(),
   event: z.enum(['data', 'exit']).optional(), data: z.string().max(24 * 1024).optional(),
   stream: z.enum(['stdout', 'stderr']).optional(),
   code: z.number().int().optional(), error: z.string().optional(), version: z.number().int().optional(),
+  capture: z.object({
+    tail: z.base64().max(4 * Math.ceil(COMMAND_PREVIEW_BYTES / 3)), boundary: z.boolean(),
+    bytes: z.int().nonnegative(), lines: z.int().nonnegative(), saved: z.boolean().optional(), error: z.string().optional(),
+  }).optional(),
 })
 type Packet = z.infer<typeof packetSchema>
 export class RemoteProcess extends EventEmitter implements WorkspaceProcess {
@@ -20,6 +26,7 @@ export class RemoteProcess extends EventEmitter implements WorkspaceProcess {
   exitCode: number | null = null
   signalCode: NodeJS.Signals | null = null
   closed = false
+  capture?: Packet['capture']
   private readonly rpc: RemoteProcessHost
   constructor(rpc: RemoteProcessHost) {
     super()
@@ -65,12 +72,33 @@ export class RemoteProcessHost {
   }
   async ready(): Promise<void> {
     const reply = await this.request({ method: 'hello' })
-    if (reply.version !== 2) { this.close(); throw new Error('远端组件版本不匹配') }
+    if (reply.version !== 3) { this.close(); throw new Error('远端组件版本不匹配') }
   }
-  spawn(command: string | { executable: string; args: string[] }, cwd: string, terminal?: { cols: number; rows: number }): RemoteProcess {
+  readonly captureCommand: NonNullable<WorkspaceIO['captureCommand']> = (command, cwd, { directory, maxBytes, maxLines, onProgress }) => {
+    const process = this.spawn(command, cwd, undefined, { directory, maxBytes, maxLines, progress: !!onProgress })
+    if (onProgress) process.stdout.setEncoding('utf8').on('data', onProgress)
+    else process.stdout.resume()
+    process.stderr.resume()
+    const result = new Promise<CapturedCommandOutput>((resolve, reject) => {
+      process.once('error', reject)
+      process.once('close', () => {
+        const capture = process.capture
+        if (!capture || (!capture.error && !!capture.saved !== (capture.bytes > maxBytes || capture.lines > maxLines))) {
+          reject(unknownWorkspaceOutcome('远端命令缺少完整的日志终态'))
+          return
+        }
+        resolve({ output: commandTailPreview(Buffer.from(capture.tail, 'base64'), capture.boundary), totalBytes: capture.bytes,
+          totalLines: capture.lines, error: capture.error,
+          fullOutputPath: capture.saved && directory ? posix.join(directory, 'command-output', process.id + '.log') : undefined })
+      })
+    })
+    return { process, result }
+  }
+  spawn(command: string | { executable: string; args: string[] }, cwd: string, terminal?: { cols: number; rows: number },
+    capture?: { directory?: string; maxBytes: number; maxLines: number; progress: boolean }): RemoteProcess {
     const process = new RemoteProcess(this)
     this.processes.set(process.id, process)
-    void this.request({ method: 'start', task: process.id, ...(typeof command === 'string' ? { command } : command), cwd, pty: Boolean(terminal), ...terminal })
+    void this.request({ method: 'start', task: process.id, ...(typeof command === 'string' ? { command } : command), cwd, pty: Boolean(terminal), ...terminal, capture })
       .then(() => process.emit('spawn'), error => { this.processes.delete(process.id); process.finish(null, error) })
     return process
   }
@@ -107,7 +135,11 @@ export class RemoteProcessHost {
           if (!this.closed) this.channel.write(`${JSON.stringify({ id: randomUUID(), method: 'ack', task: process.id })}\n`)
         })
       }
-      if (packet.event === 'exit') { this.processes.delete(process.id); process.finish(packet.code ?? null) }
+      if (packet.event === 'exit') {
+        this.processes.delete(process.id)
+        process.capture = packet.capture
+        process.finish(packet.code ?? null)
+      }
     }
   }
   private fail(error: Error, notify = true): void {

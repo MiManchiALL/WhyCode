@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { setImmediate } from 'node:timers/promises'
-import type { OpenWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../../shared/workspace-files.ts'
+import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../../shared/workspace-files.ts'
 import { WorkspaceDirectories } from './workspace-directories.ts'
 import { WorkspaceFileResource } from './workspace-file-resource.ts'
 
@@ -120,7 +120,7 @@ describe('目录标签的数据所有权', () => {
     await file.refresh()
     assert.equal(names(file).length, 400)
     assert.equal(names(file)[1], 'updated.txt')
-    assert.deepEqual(api.calls.map(call => call.offset), [0, 200, 0, 200, 0, 200])
+    assert.deepEqual(api.calls.map(call => [call.offset, call.limit]), [[0, 200], [200, 200], [0, 400], [0, 400]])
     file.close()
   })
 
@@ -213,7 +213,7 @@ function names(file: WorkspaceFileResource): string[] {
 function fixture() {
   const views = new Map<string, OpenWorkspaceFileRequest>()
   const listeners = new Set<(event: WorkspaceFileChange) => void>()
-  const calls: { id: string; offset: number }[] = []
+  const calls: { id: string; offset: number; limit: number }[] = []
   let nextId = 0
   let gate: Promise<void> | null = null
   const api = {
@@ -233,15 +233,15 @@ function fixture() {
       views.set(id, request)
       return api.readWorkspaceFile({ id })
     },
-    async readWorkspaceFile({ id, offset = 0 }: { id: string; offset?: number }): Promise<WorkspaceFileResult> {
-      calls.push({ id, offset })
+    async readWorkspaceFile({ id, offset = 0, limit = 200 }: ReadWorkspaceFileRequest): Promise<WorkspaceFileResult> {
+      calls.push({ id, offset, limit })
       await gate
       if (api.failure) return { ok: false, error: api.failure }
       const request = views.get(id)!
       if (request.kind === 'file') return { ok: true, view: { kind: 'file', id, path: request.path,
         name: 'note.txt', format: 'code', size: 3, mediaType: 'text/plain', url: '/note.txt' } }
       return { ok: true, view: { kind: 'directory', id, path: request.path, total: api.entries.length, missing: false,
-        entries: api.entries.slice(offset, offset + 200).map(entry => {
+        entries: api.entries.slice(offset, offset + limit).map(entry => {
           const name = entry.replace(/\/$/u, '')
           return { name, path: request.path ? `${request.path}/${name}` : name, kind: entry.endsWith('/') ? 'directory' : 'file' }
         }) } }

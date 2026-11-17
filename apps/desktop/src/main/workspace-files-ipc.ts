@@ -23,7 +23,7 @@ export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (r
       const owner = fileWindow(event)
       if (!request || typeof request.id !== 'string') throw new Error('文件读取请求无效')
       await directoryFor(files.runtimeFor(owner.id, request.id))
-      return { ok: true, view: await files.read(owner.id, request.id, request.offset) }
+      return { ok: true, view: await files.read(owner.id, request.id, request.offset, request.limit) }
     } catch (error) { return { ok: false, error: errorMessage(error) } }
   })
   ipcMain.on(IPC.closeWorkspaceFile, (event, id: unknown) => {

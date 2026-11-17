@@ -1,4 +1,4 @@
-import type { Readable } from 'node:stream'
+import { Readable } from 'node:stream'
 import { estimateTextTokens } from '../../context/tokens.ts'
 import { unicodeSafePrefix } from '../../text.ts'
 import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
@@ -32,18 +32,25 @@ export async function readText(
 ): Promise<ToolResult> {
   const io = ctx.workspaceIO ?? localWorkspaceIO
   const absolute = await resolveAllowed(ctx, input.path)
-  const stat = await io.fs.stat(absolute)
-  if (!stat.isFile()) return { data: '路径不是文件，请使用 ListDir 查看目录', isError: true }
-  if (await isBinaryFile(absolute, io)) {
-    return { data: `无法按文本读取二进制文件：${input.path}`, isError: true }
-  }
-
+  const unreadable = (reason: 'not-file' | 'binary'): ToolResult => ({
+    data: reason === 'binary' ? `无法按文本读取二进制文件：${input.path}` : '路径不是文件，请使用 ListDir 查看目录', isError: true,
+  })
   ctx.abortSignal.throwIfAborted()
-  const stream = io.fs.createReadStream(absolute, { encoding: 'utf8', signal: ctx.abortSignal })
+  const range = { offset: input.offset ?? 1, limit: input.limit ?? Infinity, column: input.column ?? 1 }
+  let stream: Readable
+  if (io.readTextWindow) {
+    const page = await io.readTextWindow(absolute, { ...range, limit: input.limit, maxBytes: MAX_BYTES + 4 }, ctx.abortSignal)
+    if ('unreadable' in page) return unreadable(page.unreadable)
+    if ('lines' in page) return missingLines(range.offset, page.lines)
+    if ('columns' in page) return missingColumn(range, page.columns)
+    stream = Readable.from([page.text])
+  } else {
+    if (!(await io.fs.stat(absolute)).isFile()) return unreadable('not-file')
+    if (await isBinaryFile(absolute, io)) return unreadable('binary')
+    stream = io.fs.createReadStream(absolute, { encoding: 'utf8', signal: ctx.abortSignal })
+  }
   try {
-    const result = await readPage(stream, {
-      offset: input.offset ?? 1, limit: input.limit ?? Infinity, column: input.column ?? 1,
-    })
+    const result = await readPage(stream, range, !!io.readTextWindow)
     ctx.abortSignal.throwIfAborted()
     return result
   } finally {
@@ -51,17 +58,18 @@ export async function readText(
   }
 }
 
-async function readPage(stream: Readable, range: TextRange): Promise<ToolResult> {
+async function readPage(stream: Readable, range: TextRange, positioned: boolean): Promise<ToolResult> {
   const { offset: startLine, limit, column } = range
   let body = ''
   let bytes = 0
   let lastLine = 0
-  let remainingColumn = column > 1 ? column : 0
+  let remainingColumn = column > 1 && !positioned ? column : 0
   let nextLine: number | undefined
   const lineEnds: number[] = []
   for await (const part of lineParts(stream)) {
-    const newLine = part.number !== lastLine
-    lastLine = part.number
+    const line = part.number + (positioned ? startLine - 1 : 0)
+    const newLine = line !== lastLine
+    lastLine = line
     if (lastLine < startLine) continue
     if (lastLine > startLine && remainingColumn > 0) break
     if (lastLine - startLine >= limit) {
@@ -87,13 +95,17 @@ async function readPage(stream: Readable, range: TextRange): Promise<ToolResult>
     bytes += Buffer.byteLength(text)
     if (bytes > MAX_BYTES) break
   }
-  if (!body) {
-    return { data: lastLine ? `（从第 ${startLine} 行起无内容；文件共 ${lastLine} 行）` : '（空文件）', isError: false }
-  }
-  if (remainingColumn > 0) {
-    return { data: `第 ${startLine} 行只有 ${column - remainingColumn} 个字符，无法从第 ${column} 列读取。`, isError: true }
-  }
+  if (!body) return missingLines(startLine, lastLine)
+  if (remainingColumn > 0) return missingColumn(range, column - remainingColumn)
   return { data: formatPage(body, lineEnds, range, nextLine), isError: false }
+}
+
+function missingLines(offset: number, lines: number): ToolResult {
+  return { data: lines ? `（从第 ${offset} 行起无内容；文件共 ${lines} 行）` : '（空文件）', isError: false }
+}
+
+function missingColumn(range: TextRange, length: number): ToolResult {
+  return { data: `第 ${range.offset} 行只有 ${length} 个字符，无法从第 ${range.column} 列读取。`, isError: true }
 }
 
 function formatPage(body: string, lineEnds: number[], range: TextRange, nextLine?: number): string {

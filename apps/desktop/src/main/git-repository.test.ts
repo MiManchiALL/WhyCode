@@ -23,7 +23,7 @@ async function fixture(t: TestContext) {
   const write = (path: string, content: string | Buffer) => writeFile(join(directory, path), content)
   const commit = async (message = 'initial') => { await git(['add', '-A']); await git(['commit', '-m', message]); return repo.commit('HEAD') }
   const changes = async (query: GitComparison) => readGitChanges(repo, await repo.info(), query)
-  const preview = async (query: GitComparison, path: string) => readGitFilePreview(repo, await repo.info(), query, path)
+  const preview = (query: GitComparison, path: string) => readGitFilePreview(repo, query, path)
   const mutate = async (action: GitMutation['action']) => {
     const info = await repo.info()
     return mutateGitRepository(repo, { expectedHead: info.head, expectedBranch: info.branch, action })

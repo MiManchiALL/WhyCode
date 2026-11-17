@@ -1,4 +1,4 @@
-import { localWorkspaceIO } from '../../workspace/io.ts'
+import { localWorkspaceIO, type CapturedCommandOutput } from '../../workspace/io.ts'
 import { stopWorkspaceProcess } from '../../workspace/process.ts'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import { isAbsolute, resolve } from 'node:path'
@@ -161,8 +161,12 @@ async function executeForegroundCommand(
   // 相对 cwd 按项目目录解析（与权限引擎判定基准一致），防 spawn 按进程目录解析造成错位。
   const io = ctx.workspaceIO ?? localWorkspaceIO
   const cwd = io.path.resolve(ctx.projectDir, input.cwd ?? '.')
-  const child = io.spawn ? io.spawn(input.command, cwd) : spawnNonInteractiveCommand(input.command, cwd)
-  const output = new CommandOutput(io, ctx.scratchDirectory, ctx.onProgress)
+  const remote = io.captureCommand?.(input.command, cwd, { directory: ctx.scratchDirectory,
+    maxBytes: COMMAND_PREVIEW_BYTES, maxLines: COMMAND_PREVIEW_LINES, onProgress: ctx.onProgress })
+  const child = remote?.process ?? (io.spawn ? io.spawn(input.command, cwd) : spawnNonInteractiveCommand(input.command, cwd))
+  const output = remote ? null : new CommandOutput(io, ctx.scratchDirectory, ctx.onProgress)
+  let summary: CapturedCommandOutput | undefined
+  let unconfirmedStop = false
   let outputError: Error | undefined
   let captured: Promise<void>
   const outcome = await new Promise<{ suffix: string; isError: boolean }>((resolvePromise) => {
@@ -191,7 +195,8 @@ async function executeForegroundCommand(
                 ? '[用户已停止]'
                 : '[应用关闭或进程中断，命令已停止]'
           const warning = treeStopped ? '' : '\n[警告：未能确认全部子进程均已终止]'
-          if (!treeStopped) output.destroy(new Error('未能确认命令停止，输出可能不完整'))
+          unconfirmedStop = !treeStopped
+          if (!treeStopped) output?.destroy(new Error('未能确认命令停止，输出可能不完整'))
           finish(`${suffix}${warning}\n${TOOL_OUTCOME_UNKNOWN}\n`, true)
         })
     }
@@ -209,7 +214,11 @@ async function executeForegroundCommand(
     child.on('error', (err) => {
       if (!stopping) finish(`[命令失败：${err.message}]`, true)
     })
-    captured = captureCommandOutput([child.stdout, child.stderr], output).catch(error => {
+    const collecting = remote ? remote.result.then(value => {
+      summary = value
+      if (value.error) outputError = new Error(value.error)
+    }) : captureCommandOutput([child.stdout, child.stderr], output!)
+    captured = collecting.catch(error => {
       outputError = error instanceof Error ? error : new Error(String(error))
       requestStop('output')
     })
@@ -218,15 +227,19 @@ async function executeForegroundCommand(
     // AbortSignal 在监听器注册前已中止时不会补发事件，必须显式检查。
     if (ctx.abortSignal.aborted) requestStop('abort')
   })
-  // 进程 close（尤其 SSH）不代表消费端及文件已排空；工具结果必须等句柄关闭。
-  await captured!
+  // 已确认退出后等日志排空。远端停止未获确认时，组件可能无法再交付日志终态。
+  if (!remote || !unconfirmedStop) await captured!
   const isError = outcome.isError || !!outputError
-  const diagnostic = [outcome.suffix, outputError ? `[完整输出未保存：${outputError.message}]` : ''].filter(Boolean).join('\n')
-  const preview = output.preview()
-  const data = output.truncated
+  const diagnostic = [outcome.suffix, outputError && `[完整输出未保存：${outputError.message}]`,
+    outputError && !outcome.suffix.includes(TOOL_OUTCOME_UNKNOWN) && TOOL_OUTCOME_UNKNOWN].filter(Boolean).join('\n')
+  const preview = summary?.output ?? output?.preview() ?? ''
+  const totalBytes = summary?.totalBytes ?? output?.totalBytes ?? 0
+  const totalLines = summary?.totalLines ?? output?.totalLines ?? 0
+  const fullOutputPath = unconfirmedStop ? undefined : summary?.fullOutputPath ?? output?.fullOutputPath
+  const data = totalBytes > COMMAND_PREVIEW_BYTES || totalLines > COMMAND_PREVIEW_LINES
     ? serializeCommandOutputResult({
-      type: 'command-output', output: preview, totalBytes: output.totalBytes, totalLines: output.totalLines,
-      ...(output.fullOutputPath ? { fullOutputPath: output.fullOutputPath } : {}),
+      type: 'command-output', output: preview, totalBytes, totalLines,
+      ...(fullOutputPath ? { fullOutputPath } : {}),
       ...(diagnostic ? { diagnostic } : {}),
     })
     : preview + diagnostic

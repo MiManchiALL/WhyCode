@@ -22,6 +22,7 @@ it('SSH 连续对话按当前文件生成请求，正文读取失败释放句柄
   const firstStat = await stat(firstFile)
 
   await env.connections.withFiles(env.id, async fs => {
+    let skillReads = 0
     let openFiles = 0
     let peakOpenFiles = 0
     let failRead = false
@@ -31,6 +32,7 @@ it('SSH 连续对话按当前文件生成请求，正文读取失败释放句柄
         ...fs,
         open: async (path, flags) => {
           const file = await fs.open(path, flags)
+          if (path.endsWith('/SKILL.md')) skillReads++
           peakOpenFiles = Math.max(peakOpenFiles, ++openFiles)
           return {
             stat: () => file.stat(),
@@ -47,25 +49,28 @@ it('SSH 连续对话按当前文件生成请求，正文读取失败释放句柄
     const errors: string[] = []
     const catalog = new SkillCatalogService({ homeDir: env.remoteRoot, workspaceIO: io })
     const definitions = new SubagentDefinitionCatalogService()
+    const model = modelEntry(languageModel(async request => {
+      assert.equal(openFiles, 0, '请求模型前所有预读句柄已关闭')
+      const catalogText = request.prompt.flatMap(message => typeof message.content === 'string'
+        ? [] : message.content.flatMap(part => part.type === 'text' ? [part.text] : []))
+        .find(text => text.includes('<whycode-skill-catalog '))
+      assert.ok(catalogText)
+      requests.push(catalogText)
+      return finalStream('你好')
+    }))
+    const providerConfig = { apiKey: 'fixture' }
     const session = new AgentSession({
-      model: modelEntry(languageModel(async request => {
-        assert.equal(openFiles, 0, '请求模型前所有预读句柄已关闭')
-        const catalogText = request.prompt.flatMap(message => typeof message.content === 'string'
-          ? [] : message.content.flatMap(part => part.type === 'text' ? [part.text] : []))
-          .find(text => text.includes('<whycode-skill-catalog '))
-        assert.ok(catalogText)
-        requests.push(catalogText)
-        return finalStream('你好')
-      })),
-      providerConfig: { apiKey: 'fixture' }, workspaceIO: io,
+      model, providerConfig, workspaceIO: io,
       promptContext: { projectDir: env.project, homeDir: env.remoteRoot, osPlatform: 'linux' },
       skillCatalog: catalog, loadSubagentCatalog: () => definitions.snapshot(env.project, io),
       emit: event => { if (event.type === 'error') errors.push(event.message) },
       requestApproval: async () => ({ approved: false }),
     })
     try {
-      await session.initializeContextUsage()
+      await session.setModelSelection(model, providerConfig, 'default', 'upcoming-request')
+      assert.equal(skillReads, 0)
       assert.equal(await session.handleUserMessage('你好'), 'completed')
+      assert.equal(skillReads, 10)
       assert.match(requests[0]!, /First instruction/)
       assert.match(requests[0]!, /- skill-1 \|/)
 

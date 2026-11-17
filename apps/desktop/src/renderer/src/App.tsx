@@ -388,6 +388,27 @@ export function App() {
     btwModeRef.current = mode
     setBtwModeState(mode)
   }, [])
+  const showConversationFeedback = useCallback((
+    tone: ConversationFeedback['tone'],
+    message: string,
+    floating = false,
+  ) => {
+    setConversationFeedback({
+      id: ++conversationFeedbackIdRef.current,
+      tone,
+      message,
+      floating,
+    })
+  }, [])
+  const dismissConversationFeedback = useCallback((id: number) => {
+    setConversationFeedback((current) => current?.id === id ? null : current)
+  }, [])
+  const showError = useCallback((text: string) => {
+    showConversationFeedback('error', text)
+  }, [showConversationFeedback])
+  const sshConnection = useSshWorkspaceConnection(workspace.mode === 'ssh' ? workspace.target : null, showError)
+  const historyNeedsSkillCatalog = useMemo(() => workspace.mode === 'ssh'
+    && blocks.some(block => block.kind === 'tool' && block.call.name === 'Skill'), [workspace.mode, blocks])
   const {
     menuId: composerMenuId,
     activeOptionId: composerActiveOptionId,
@@ -417,6 +438,9 @@ export function App() {
     modelId,
     projectDir,
     workspaceMode: workspace.mode,
+    sshAvailability: sshConnection.loading ? 'loading' : sshConnection.connection?.status === 'connected' ? 'connected' : 'offline',
+    catalogVisible: historyNeedsSkillCatalog || (rightPanelState.open && rightPanelState.tabs.some(tab =>
+      tab.id === rightPanelState.activeTabId && tab.page.kind === 'subagent-transcript')),
     compactAvailable: conversationStarted,
     compactDisabled: status !== 'idle'
       && status !== 'error',
@@ -463,25 +487,6 @@ export function App() {
       && thinkingGapIdleTarget?.runtimeId === runtimeId
       && thinkingGapIdleTarget.blocks === blocks
     )
-  const showConversationFeedback = useCallback((
-    tone: ConversationFeedback['tone'],
-    message: string,
-    floating = false,
-  ) => {
-    setConversationFeedback({
-      id: ++conversationFeedbackIdRef.current,
-      tone,
-      message,
-      floating,
-    })
-  }, [])
-  const dismissConversationFeedback = useCallback((id: number) => {
-    setConversationFeedback((current) => current?.id === id ? null : current)
-  }, [])
-  const showError = useCallback((text: string) => {
-    showConversationFeedback('error', text)
-  }, [showConversationFeedback])
-  const sshConnection = useSshWorkspaceConnection(workspace.mode === 'ssh' ? workspace.target : null, showError)
   const sshConnecting = sshConnection.connection?.status === 'connecting'
   const sshSendUnavailableReason = sshConnection.sendUnavailableReason
   const gitPage = committedRightPanelState.tabs.find(tab => tab.page.kind === 'git')?.page
