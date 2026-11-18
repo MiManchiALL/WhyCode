@@ -1,102 +1,100 @@
-import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
+import ignore from 'ignore'
+import { Minimatch } from 'minimatch'
+import type { WorkspaceDirent, WorkspaceIO } from '../../workspace/io.ts'
+import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
 import { IGNORED_DIRS } from '../fs-utils.ts'
 
-const DIRECTORY_BATCH_SIZE = 32
-const MAX_SCANNED_FILES = 200_000
-const MAX_SCANNED_DIRECTORIES = 20_000
-
-export interface CollectedFiles {
-  files: string[]
-  truncated: boolean
+export function fileGlob(pattern: string): Minimatch {
+  const path = pattern.replaceAll('\\', '/')
+  return new Minimatch(path.replace(/^(?:\.\/|\/)/, ''), {
+    platform: 'linux', dot: true, matchBase: !path.includes('/'), noext: true, nonegate: true, nocomment: true,
+    braceExpandMax: 1_000,
+  })
 }
 
-/** ripgrep 不可用时的有界并发遍历；不跟随目录符号链接，避免循环。 */
-export async function collectFiles(
-  root: string,
-  signal: AbortSignal,
-  io: WorkspaceIO = localWorkspaceIO,
-): Promise<CollectedFiles> {
-  const { readdir } = io.fs
-  const { join } = io.path
-  const files: string[] = []
-  const directories = [root]
-  let scannedDirectories = 0
+interface IgnoreFile {
+  directory: string
+  priority: number
+  rules: ReturnType<typeof ignore>
+}
 
-  while (directories.length > 0 && files.length < MAX_SCANNED_FILES && scannedDirectories < MAX_SCANNED_DIRECTORIES) {
+const IGNORE_FILES = ['.git/info/exclude', '.gitignore', '.ignore', '.rgignore']
+
+async function directoryRules(io: WorkspaceIO, directory: string, inherited: IgnoreFile[], entries: WorkspaceDirent[], signal: AbortSignal): Promise<IgnoreFile[]> {
+  const found: IgnoreFile[] = []
+  for (const [priority, name] of IGNORE_FILES.entries()) {
+    const present = priority === 0
+      ? entries.some(entry => entry.name === '.git' && entry.isDirectory())
+      : entries.some(entry => entry.name === name && entry.isFile())
+    if (!present) continue
+    const path = io.path.join(directory, name)
+    const bytes = await readBoundedWorkspaceFile(path, 2 * 1024 * 1024, io, signal).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined
+      throw error
+    })
+    if (bytes) found.push({ directory, priority, rules: ignore({ ignorecase: false }).add(bytes.toString('utf8')) })
+  }
+  // .rgignore 优先于 .ignore 和 Git 规则；同类文件以最近的目录为准。
+  return found.length ? [...found, ...inherited].sort((a, b) => b.priority - a.priority) : inherited
+}
+
+export interface ScanStatus { limited: boolean; unreadable: number }
+
+export function incompleteScan(scan: ScanStatus, large = 0): string | undefined {
+  const reasons: string[] = []
+  if (large) reasons.push(`${large} 个文件超过 2 MiB`)
+  if (scan.unreadable) reasons.push(`${scan.unreadable} 项不可读取`)
+  if (scan.limited) reasons.push('达到遍历上限，请缩小 path')
+  return reasons.length ? `搜索不完整：${reasons.join('，')}` : undefined
+}
+
+/** 逐目录排序，按需交付文件。Grep 继承项目内的 ignore 规则，Glob 仅排除固定目录。 */
+export async function* walkSearchFiles(root: string, signal: AbortSignal, io: WorkspaceIO, status: ScanStatus, projectDir?: string): AsyncGenerator<string> {
+  const { relative, dirname, join, isAbsolute } = io.path
+  let directories = 0
+  let files = 0
+  async function entriesAt(directory: string) {
     signal.throwIfAborted()
-    const batch = directories.splice(0, Math.min(DIRECTORY_BATCH_SIZE, MAX_SCANNED_DIRECTORIES - scannedDirectories))
-    scannedDirectories += batch.length
-    const results = await Promise.all(
-      batch.map(async (dir) => ({
-        dir,
-        entries: await readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-          if (['ENOENT', 'EACCES', 'EPERM'].includes(error.code ?? '')) return []
-          throw error
-        }),
-      })),
-    )
-    signal.throwIfAborted()
-    for (const { dir, entries } of results) {
-      for (const entry of entries) {
-        if (IGNORED_DIRS.has(entry.name)) continue
-        const full = join(dir, entry.name)
-        if (entry.isDirectory()) {
-          if (directories.length + scannedDirectories >= MAX_SCANNED_DIRECTORIES) return { files, truncated: true }
-          directories.push(full)
-        }
-        else if (entry.isFile()) files.push(full)
-        if (files.length >= MAX_SCANNED_FILES) break
-      }
-      if (files.length >= MAX_SCANNED_FILES) break
+    return io.fs.readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return []
+      if (error.code === 'EACCES' || error.code === 'EPERM') { status.unreadable++; return [] }
+      throw error
+    })
+  }
+  let inherited: IgnoreFile[] = []
+  if (projectDir) {
+    const relativeRoot = relative(projectDir, root)
+    if (!isAbsolute(relativeRoot) && relativeRoot !== '..' && !relativeRoot.startsWith('..' + io.path.sep)) {
+      const ancestors: string[] = []
+      for (let dir = root; relative(projectDir, dir); dir = dirname(dir)) ancestors.push(dirname(dir))
+      for (const dir of ancestors.reverse()) inherited = await directoryRules(io, dir, inherited, await entriesAt(dir), signal)
     }
   }
-
-  return {
-    files,
-    truncated: directories.length > 0 || files.length >= MAX_SCANNED_FILES,
-  }
-}
-
-/** 支持常用的 *, **, ?, {a,b}；作为无 ripgrep 环境的兼容回退。 */
-export function globToRegExp(pattern: string): RegExp {
-  pattern = pattern.replaceAll('\\', '/')
-  const basenameOnly = !pattern.includes('/')
-  let source = ''
-  for (let i = 0; i < pattern.length; i++) {
-    const char = pattern[i]!
-    if (char === '*') {
-      if (pattern[i + 1] === '*') {
-        i++
-        if (pattern[i + 1] === '/') {
-          i++
-          source += '(?:.*/)?'
-        } else {
-          source += '.*'
-        }
-      } else {
-        source += '[^/]*'
+  async function* visit(directory: string, parentRules: IgnoreFile[]): AsyncGenerator<string> {
+    if (++directories > 20_000) { status.limited = true; return }
+    const entries = await entriesAt(directory)
+    const rules = projectDir ? await directoryRules(io, directory, parentRules, entries, signal) : parentRules
+    entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    for (const entry of entries) {
+      signal.throwIfAborted()
+      const isDirectory = entry.isDirectory()
+      if (IGNORED_DIRS.has(entry.name) || (!isDirectory && !entry.isFile())) continue
+      const path = join(directory, entry.name)
+      let ignored = false
+      for (const scope of rules) {
+        const key = relative(scope.directory, path).replaceAll('\\', '/') + (isDirectory ? '/' : '')
+        const result = scope.rules.test(key)
+        if (result.ignored || result.unignored) { ignored = result.ignored; break }
       }
-    } else if (char === '?') {
-      source += '[^/]'
-    } else if (char === '{') {
-      const end = pattern.indexOf('}', i + 1)
-      if (end !== -1) {
-        const choices = pattern
-          .slice(i + 1, end)
-          .split(',')
-          .map(escapeRegExp)
-        source += `(?:${choices.join('|')})`
-        i = end
+      if (ignored) continue
+      if (isDirectory) {
+        yield* visit(path, rules)
+        if (status.limited) return
       } else {
-        source += '\\{'
+        if (++files > 200_000) { status.limited = true; return }
+        yield path
       }
-    } else {
-      source += escapeRegExp(char)
     }
   }
-  return new RegExp(`${basenameOnly ? '(?:^|/)' : '^'}${source}$`)
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  yield* visit(root, inherited)
 }

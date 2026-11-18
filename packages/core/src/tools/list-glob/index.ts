@@ -2,10 +2,10 @@ import { localWorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { displayToolPath, resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
-import { collectFiles, globToRegExp } from '../search/fallback.ts'
+import { fileGlob, incompleteScan, walkSearchFiles } from '../search/fallback.ts'
 import { runRipgrepLines, SEARCH_EXCLUSIONS } from '../search/ripgrep.ts'
 import { withSearchDeadline } from '../search/deadline.ts'
-import { matchFallback } from '../search/fallback-worker.ts'
+import { SearchPage } from '../search/page.ts'
 
 export const LIST_DIR_TOOL_NAME = 'ListDir'
 export const GLOB_TOOL_NAME = 'Glob'
@@ -43,7 +43,7 @@ export const listDirTool = buildTool({
     const note = truncated
       ? `\n[共 ${all.length} 项，当前显示 ${offset + 1}-${offset + shown.length}；用 offset=${offset + shown.length} 继续]`
       : ''
-    return { data: shown.join('\n') + note || '（空目录）', isError: false }
+    return { data: shown.join('\n') + note || (all.length ? `（已到目录末尾，共 ${all.length} 项）` : '（空目录）'), isError: false }
   },
 })
 
@@ -51,7 +51,7 @@ export const globTool = buildTool({
   name: GLOB_TOOL_NAME,
   description: '按模式快速查找文件名',
   prompt:
-    '在允许范围内按 glob 模式查找文件，例如 "src/**/*.ts"、"*.json"、"*.{ts,tsx}"。可用 path 缩小搜索根目录，并用 limit/offset 分页。优先使用高性能 ripgrep，环境没有 rg 时自动回退。',
+    '按 glob 模式递归查找文件。已知目录时用 path 缩小搜索根目录，例如 path="src"、pattern="**/*.ts"。支持 limit/offset 分页。',
   inputSchema: z.object({
     pattern: z.string().min(1).describe('glob 模式，支持 *、**、? 和 {a,b}'),
     path: z.string().optional().describe('搜索根目录，默认项目根目录'),
@@ -68,38 +68,24 @@ export const globTool = buildTool({
 
       const root = await resolveAllowed(ctx, input.path ?? '.')
       ctx.abortSignal.throwIfAborted()
-      const offset = input.offset ?? 0
-      const limit = input.limit ?? DEFAULT_GLOB_LIMIT
-      const requested = offset + limit + 1
-      const rg = await runRipgrepLines(
-        ['--files', '--hidden', '--no-ignore', '--sort', 'path', '--glob', input.pattern, ...SEARCH_EXCLUSIONS, '--', '.'],
+      const page = new SearchPage(input.offset ?? 0, input.limit ?? DEFAULT_GLOB_LIMIT)
+      const pattern = input.pattern.replaceAll('\\', '/').replace(/^\.\//, '/')
+      const add = (path: string) => page.add(displayToolPath(ctx.projectDir, root, path, io))
+      const native = await runRipgrepLines(
+        ['--files', '--hidden', '--no-ignore', '--sort', 'path', '--glob', pattern, ...SEARCH_EXCLUSIONS, '--', '.'],
         root,
         ctx.abortSignal,
-        requested,
+        add,
         io,
       )
 
-      let matches: string[]
-      let scanTruncated = false
-      if (rg) {
-        matches = rg.lines.map((path) => displayToolPath(ctx.projectDir, root, path, io))
-        scanTruncated = rg.truncated
-      } else {
-        const collected = await collectFiles(root, ctx.abortSignal, io)
-        const paths = await matchFallback({
-          kind: 'glob', files: collected.files.map(path => relative(root, path).replaceAll('\\', '/')),
-          expression: globToRegExp(input.pattern).source, limit: requested,
-        }, ctx.abortSignal)
-        matches = paths.map(path => displayToolPath(ctx.projectDir, root, path, io))
-        scanTruncated = collected.truncated || paths.length >= requested
+      if (native) return page.result('（无匹配文件）')
+      const matcher = fileGlob(pattern)
+      const status = { limited: false, unreadable: 0 }
+      for await (const path of walkSearchFiles(root, ctx.abortSignal, io, status)) {
+        if (matcher.match(relative(root, path).replaceAll('\\', '/')) && !add(path)) break
       }
-
-      const hasMore = scanTruncated || matches.length > offset + limit
-      const shown = matches.slice(offset, offset + limit)
-      const note = hasMore
-        ? `\n[结果已截断；用更具体的 pattern/path，或 offset=${offset + shown.length} 继续]`
-        : ''
-      return { data: shown.join('\n') + note || '（无匹配文件）', isError: false }
+      return page.result('（无匹配文件）', incompleteScan(status))
     })
   },
 })

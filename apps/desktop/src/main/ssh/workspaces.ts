@@ -1,5 +1,6 @@
 import { once } from 'node:events'
-import { posix } from 'node:path'
+import { existsSync } from 'node:fs'
+import { join, posix } from 'node:path'
 import { localWorkspaceIO, validateSessionId, type WorkspaceBinding } from '@whycode/core'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import type { SessionScratchPaths } from '../session-scratch.ts'
@@ -21,7 +22,14 @@ export class SshScratchCleanupError extends Error {
 
 export class SshWorkspaces {
   readonly connections: SshConnections
-  constructor(connections: SshConnections) { this.connections = connections }
+  private readonly localIO: typeof localWorkspaceIO
+  constructor(connections: SshConnections) {
+    this.connections = connections
+    const bundled = join(connections.resources, `ripgrep-win32-${process.arch}.exe`)
+    this.localIO = process.platform === 'win32' && existsSync(bundled)
+      ? { ...localWorkspaceIO, ripgrepPath: bundled }
+      : localWorkspaceIO
+  }
   async assertMessageAllowed(workspace: RuntimeWorkspace): Promise<void> {
     if (workspace.mode !== 'ssh') return
     const id = await this.connections.connectionIdForTarget(workspace.target)
@@ -37,7 +45,7 @@ export class SshWorkspaces {
     return { mode: 'ssh', target: this.connections.host(id, target).target, label: connection.connection.name, workingDirectory: path }
   }
   io(workspace: RuntimeWorkspace) {
-    return workspace.mode === 'ssh' ? this.connections.io(workspace.target) : localWorkspaceIO
+    return workspace.mode === 'ssh' ? this.connections.io(workspace.target) : this.localIO
   }
   async connect(workspace: RuntimeWorkspace) {
     if (workspace.mode !== 'ssh') return null

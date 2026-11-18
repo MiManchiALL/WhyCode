@@ -34,6 +34,25 @@ after(async () => {
 })
 
 describe('搜索无 ripgrep 回退', () => {
+  it('明确指定的大文件返回未搜索原因，目录搜索只返回一条不完整说明', async () => {
+    const path = 'large.log'
+    await writeFile(join(root, path), 'needle\n' + ' '.repeat(2 * 1024 * 1024))
+    const single = await grepTool.execute({ path, pattern: 'needle' }, ctx)
+    assert.equal(single.isError, true)
+    assert.match(single.data, /large\.log.*2 MiB/)
+    const partial = await grepTool.execute({ include: '*.log', pattern: 'needle' }, ctx)
+    assert.equal(partial.isError, false)
+    assert.equal(partial.data, '[搜索不完整：1 个文件超过 2 MiB]')
+  })
+  it('跨文件批次分页只跳过一次，连续匹配和上下文分别标记', async () => {
+    const directory = join(root, 'batch')
+    await mkdir(directory)
+    for (let n = 0; n < 20; n++) {
+      await writeFile(join(directory, `${String(n).padStart(2, '0')}.txt`), 'before\nmatch\nmatch\nafter\n')
+    }
+    const result = await grepTool.execute({ path: 'batch', pattern: 'match', context: 1, offset: 68, limit: 4 }, ctx)
+    assert.equal(result.data, 'batch/17.txt\n1-before\n2:match\n3:match\n4-after\n[用 offset=72 继续]')
+  })
   it('basename 模式匹配子目录，include 在读文件之前过滤', async () => {
     await writeFile(join(root, 'src', 'ignored.bin'), Buffer.alloc(100_000, 1))
     const glob = await globTool.execute({ pattern: '*.ts' }, ctx)

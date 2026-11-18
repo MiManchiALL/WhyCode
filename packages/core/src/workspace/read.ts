@@ -1,7 +1,15 @@
+import { isUtf8 } from 'node:buffer'
 import { localWorkspaceIO, type WorkspaceIO } from './io.ts'
 
 const READ_CHUNK_BYTES = 64 * 1024
 const READ_CONCURRENCY = 8
+
+/** 无损解码文本，保留 UTF-8 BOM。 */
+export function decodeWorkspaceText(bytes: Buffer): string | undefined {
+  return bytes.includes(0) || !isUtf8(bytes) ? undefined : bytes.toString('utf8')
+}
+
+export class WorkspaceFileTooLargeError extends Error {}
 
 /** 按输入顺序交付一批已收束的读取。调用方达到预算后可停止，后续批次不会启动。 */
 export async function* readWorkspaceBatches<T, R>(items: readonly T[], read: (item: T) => Promise<R>) {
@@ -25,8 +33,9 @@ export async function readBoundedWorkspaceFile(
   try {
     const metadata = await file.stat()
     if (!metadata.isFile()) throw new Error(`路径必须指向普通文件：${path}`)
-    if (!Number.isSafeInteger(metadata.size) || metadata.size < 0 || (range === 'complete' && metadata.size > maxBytes)) {
-      throw new Error(`文件超过 ${maxBytes} 字节上限：${path}`)
+    if (!Number.isSafeInteger(metadata.size) || metadata.size < 0) throw new Error(`文件大小无效：${path}`)
+    if (range === 'complete' && metadata.size > maxBytes) {
+      throw new WorkspaceFileTooLargeError(`文件超过 ${maxBytes} 字节上限：${path}`)
     }
     const bytes = Buffer.alloc(Math.min(metadata.size, maxBytes))
     for (let start = 0; start < bytes.byteLength; start += READ_CHUNK_BYTES * READ_CONCURRENCY) {

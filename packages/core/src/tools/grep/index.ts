@@ -1,42 +1,20 @@
-import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
+import { localWorkspaceIO } from '../../workspace/io.ts'
 import { buildTool } from '../tool.ts'
 import { displayToolPath, resolveAllowed } from '../fs-utils.ts'
-import { fallbackGrep, type GrepOutputMode } from '../search/fallback-grep.ts'
+import { fallbackGrep } from '../search/fallback-grep.ts'
+import { fileGlob } from '../search/fallback.ts'
 import { runRipgrepLines, SEARCH_EXCLUSIONS } from '../search/ripgrep.ts'
 import { withSearchDeadline } from '../search/deadline.ts'
+import { SearchPage } from '../search/page.ts'
 
 export const GREP_TOOL_NAME = 'Grep'
-
-const DEFAULT_LIMIT = 100
-
-function normalizeRipgrepLine(
-  line: string,
-  mode: GrepOutputMode,
-  projectDir: string,
-  root: string,
-  io: WorkspaceIO,
-): string {
-  if (line === '--') return line
-  if (mode === 'files_with_matches') return displayToolPath(projectDir, root, line, io)
-  if (mode === 'content') {
-    const first = line.indexOf('\t')
-    const second = first === -1 ? -1 : line.indexOf('\t', first + 1)
-    if (first === -1 || second === -1) return line
-    const path = line.slice(0, first)
-    const lineNumber = line.slice(first + 1, second)
-    return `${displayToolPath(projectDir, root, path, io)}:${lineNumber}:${line.slice(second + 1)}`
-  }
-  const match = line.match(/^(.*):(\d+)$/)
-  if (!match) return line
-  return `${displayToolPath(projectDir, root, match[1]!, io)}:${match[2]}`
-}
 
 export const grepTool = buildTool({
   name: GREP_TOOL_NAME,
   description: '使用正则或纯文本快速搜索文件内容',
   prompt:
-    '在允许范围内搜索文件内容。默认返回“路径:行号:内容”；可切换为 files_with_matches 或 count，支持 include、大小写、纯文本、上下文和 limit/offset。优先使用 ripgrep 并尊重 ignore 文件，环境没有 rg 时自动使用有界并发回退。结果过多时应缩小 pattern/include/path 或分页。',
+    '搜索文件内容。目录搜索遵循项目 ignore 规则，include 进一步限定文件。连续命中同一文件时只列一次路径，行号后的 : 表示匹配，- 表示上下文。只需路径或数量时用 files_with_matches 或 count。',
   inputSchema: z.object({
     pattern: z.string().min(1).describe('正则表达式；literal=true 时按普通文本匹配'),
     include: z.string().optional().describe('文件 glob，例如 "*.ts"、"src/**/*.{ts,tsx}"'),
@@ -57,72 +35,56 @@ export const grepTool = buildTool({
   async execute(input, ctx) {
     return withSearchDeadline(ctx, async ctx => {
       const io = ctx.workspaceIO ?? localWorkspaceIO
-      const { stat } = io.fs
-      const { dirname, basename } = io.path
-
-      const requestedPath = await resolveAllowed(ctx, input.path ?? '.')
+      const path = await resolveAllowed(ctx, input.path ?? '.')
       ctx.abortSignal.throwIfAborted()
-      const pathStats = await stat(requestedPath)
+      const stats = await io.fs.stat(path)
       ctx.abortSignal.throwIfAborted()
-      if (!pathStats.isDirectory() && !pathStats.isFile()) {
+      if (!stats.isDirectory() && !stats.isFile()) {
         return { data: `搜索失败：${input.path ?? '.'} 不是普通文件或目录`, isError: true }
       }
-      const root = pathStats.isDirectory() ? requestedPath : dirname(requestedPath)
-      const target = pathStats.isDirectory() ? '.' : basename(requestedPath)
+      const root = stats.isDirectory() ? path : io.path.dirname(path)
+      const target = stats.isDirectory() ? '.' : io.path.basename(path)
       const mode = input.outputMode ?? 'content'
-      const offset = input.offset ?? 0
-      const limit = input.limit ?? DEFAULT_LIMIT
-      const requested = offset + limit + 1
-      const args = ['--hidden', '--sort', 'path', '--color', 'never', '--max-columns', '500', '--with-filename']
+      const page = new SearchPage(input.offset ?? 0, input.limit ?? 100)
+      const include = input.include ? fileGlob(input.include) : undefined
+      const args = ['--hidden', '--no-require-git', '--sort', 'path', '--color', 'never', '--with-filename']
       if (mode === 'content') {
-        args.push(
-          '--line-number',
-          '--no-heading',
-          '--field-match-separator',
-          '\t',
-          '--field-context-separator',
-          '\t',
-        )
-        if ((input.context ?? 0) > 0) args.push('--context', String(input.context))
-      } else if (mode === 'files_with_matches') {
-        args.push('--files-with-matches')
-      } else {
-        args.push('--count')
-      }
+        args.push('--null', '--line-number', '--no-heading', '--no-context-separator', '--max-columns', '500', '--max-columns-preview')
+        if (input.context) args.push('--context', String(input.context))
+      } else if (mode === 'count') args.push('--null', '--count')
+      else args.push('--files-with-matches')
       if (input.caseSensitive === false) args.push('--ignore-case')
       if (input.literal) args.push('--fixed-strings')
-      if (input.include) args.push('--glob', input.include)
+      // 文件类型筛选保留 ignore 优先级。含目录的 glob 还需检查相对路径。
+      if (include) {
+        const split = include.pattern.lastIndexOf('/') + 1
+        const leaf = include.pattern.slice(split)
+        if (leaf && !/[[{]/.test(include.pattern.slice(0, split))) {
+          args.push('--type-add', `whycode:${leaf}`, '--type', 'whycode')
+        }
+      }
       args.push(...SEARCH_EXCLUSIONS, '--regexp', input.pattern, '--', target)
 
-      const rg = await runRipgrepLines(args, root, ctx.abortSignal, requested, io)
-      const searched = rg
-        ? {
-            lines: rg.lines.map((line) =>
-              normalizeRipgrepLine(line, mode, ctx.projectDir, root, io),
-            ),
-            truncated: rg.truncated,
-          }
-        : await fallbackGrep({
-            io,
-            root,
-            onlyFile: pathStats.isFile() ? requestedPath : undefined,
-            projectDir: ctx.projectDir,
-            pattern: input.pattern,
-            include: input.include,
-            mode,
-            caseSensitive: input.caseSensitive ?? true,
-            literal: input.literal ?? false,
-            context: input.context ?? 0,
-            signal: ctx.abortSignal,
-            resultLimit: requested,
-          })
-
-      const hasMore = searched.truncated || searched.lines.length > offset + limit
-      const shown = searched.lines.slice(offset, offset + limit)
-      const note = hasMore
-        ? `\n[结果已截断；请缩小搜索范围，或用 offset=${offset + shown.length} 继续]`
-        : ''
-      return { data: shown.join('\n') + note || '（无匹配）', isError: false }
+      let lastPath: string | undefined
+      let displayPath = ''
+      const native = await runRipgrepLines(args, root, ctx.abortSignal, line => {
+        const end = mode === 'files_with_matches' ? line.length : line.indexOf('\0')
+        if (end < 0) throw new Error('搜索结果缺少路径分隔符')
+        const rawPath = line.slice(0, end)
+        if (lastPath !== rawPath) {
+          lastPath = rawPath
+          const relative = rawPath.replaceAll('\\', '/').replace(/^\.\//, '')
+          displayPath = !include || include.match(relative) ? displayToolPath(ctx.projectDir, root, rawPath, io) : ''
+        }
+        if (!displayPath) return true
+        if (mode === 'files_with_matches') return page.add(displayPath)
+        const value = line.slice(end + 1)
+        return page.add(mode === 'count' ? `${displayPath}:${value}` : { path: displayPath, line: value })
+      }, io)
+      if (native) return page.result('（无匹配）')
+      return fallbackGrep({ root, onlyFile: stats.isFile() ? path : undefined, include }, {
+        pattern: input.pattern, mode, caseSensitive: input.caseSensitive ?? true, literal: input.literal ?? false, context: input.context ?? 0,
+      }, page, ctx)
     })
   },
 })

@@ -4,20 +4,13 @@ import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { stopWorkspaceProcess } from '../../workspace/process.ts'
 import { IGNORED_DIRS } from '../fs-utils.ts'
 
 const MAX_STDERR_CHARS = 4_000
-const MAX_OUTPUT_CHARS = 1024 * 1024
 const MAX_LINE_CHARS = 64 * 1024
 
 // 匹配任意深度的目录本身才能在进入前剪枝；仅排除其内容仍会读取目录。
 export const SEARCH_EXCLUSIONS = [...IGNORED_DIRS].flatMap(dir => ['--glob', `!**/${dir}`])
-
-export interface RipgrepLines {
-  lines: string[]
-  truncated: boolean
-}
 
 let ripgrepPathPromise: Promise<string | null> | null = null
 
@@ -58,47 +51,56 @@ export async function runRipgrepLines(
   args: string[],
   cwd: string,
   signal: AbortSignal,
-  maxLines: number,
+  onLine: (line: string) => boolean,
   io: WorkspaceIO = localWorkspaceIO,
-): Promise<RipgrepLines | null> {
+): Promise<boolean> {
   signal.throwIfAborted()
-  const executable = !io.ripgrep && io.identity === 'local' ? await getRipgrepPath() : null
+  const executable = !io.ripgrep && io.identity === 'local' ? io.ripgrepPath ?? await getRipgrepPath() : null
   signal.throwIfAborted()
-  if (!io.ripgrep && !executable) return null
+  if (!io.ripgrep && !executable) return false
 
-  return new Promise<RipgrepLines>((resolve, reject) => {
+  return new Promise<boolean>((resolve, reject) => {
     const argv = ['--no-config', '--line-buffered', ...args]
     const child = io.ripgrep ? io.ripgrep(argv, cwd) : spawn(executable!, argv, {
       cwd,
-      detached: process.platform !== 'win32',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const decoder = new StringDecoder('utf8')
-    const lines: string[] = []
     let pending = ''
     let stderr = ''
     let settled = false
     let limitReached = false
-    let outputChars = 0
     let stopping: Promise<boolean> | undefined
 
-    const stop = () => { stopping ??= stopWorkspaceProcess(child); void stopping.catch(finish) }
+    const stop = () => {
+      if ('terminate' in child) {
+        stopping ??= child.terminate()
+        void stopping.catch(finish)
+      } else {
+        // 直接启动的 rg 没有 shell 或子进程。
+        child.kill()
+      }
+    }
 
     const finish = (error?: Error) => {
       if (settled) return
       settled = true
       signal.removeEventListener('abort', onAbort)
       if (error) reject(error)
-      else resolve({ lines, truncated: limitReached })
+      else resolve(true)
     }
 
     const acceptLine = (line: string) => {
       if (line.endsWith('\r')) line = line.slice(0, -1)
       if (line.length === 0) return
-      lines.push(line)
-      outputChars += line.length
-      if (lines.length >= maxLines || outputChars >= MAX_OUTPUT_CHARS) { limitReached = true; stop() }
+      try {
+        if (line.length > MAX_LINE_CHARS) throw new Error('搜索输出单行超过限制，请缩小搜索范围')
+        if (!onLine(line)) { limitReached = true; stop() }
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)))
+        stop()
+      }
     }
 
     child.stdout!.on('data', (chunk: Buffer) => {
@@ -107,9 +109,8 @@ export async function runRipgrepLines(
       const parts = pending.split('\n')
       pending = parts.pop() ?? ''
       for (const line of parts) {
-        if (line.length > MAX_LINE_CHARS) { stop(); finish(new Error('搜索输出单行超过限制，请缩小搜索范围')); return }
         acceptLine(line)
-        if (limitReached) break
+        if (limitReached || settled) return
       }
       if (pending.length > MAX_LINE_CHARS) { stop(); finish(new Error('搜索输出单行超过限制，请缩小搜索范围')) }
     })

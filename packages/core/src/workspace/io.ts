@@ -64,6 +64,8 @@ export interface WorkspaceIO {
     signal: AbortSignal) => Promise<{ text: string } | { lines: number } | { columns: number } | { unreadable: 'not-file' | 'binary' }>
   /** 宿主提供的受管搜索程序；参数直接传递，不经过 shell。 */
   ripgrep?: (args: string[], cwd: string) => WorkspaceProcess
+  /** 本地桌面分发的搜索程序绝对路径。 */
+  readonly ripgrepPath?: string
 }
 
 export const localWorkspaceIO: WorkspaceIO = {

@@ -1,4 +1,5 @@
 import { localWorkspaceIO, workspacePathKey } from '../../workspace/io.ts'
+import { decodeWorkspaceText } from '../../workspace/read.ts'
 import { z } from 'zod'
 import { resolveAllowed } from '../fs-utils.ts'
 import { buildTool, type ToolContext } from '../tool.ts'
@@ -40,84 +41,83 @@ interface StagedFile {
   absolute: string
   displayPath: string
   original: string
-  replacements: Replacement[]
   updated: string
 }
 
-function findMatches(content: string, oldText: string): Array<{ start: number; end: number }> {
-  const matches: Array<{ start: number; end: number }> = []
-  let from = 0
-  while (from <= content.length - oldText.length) {
-    const start = content.indexOf(oldText, from)
-    if (start === -1) break
-    matches.push({ start, end: start + oldText.length })
-    from = start + oldText.length
-  }
-  return matches
-}
-
-function stageEdit(file: StagedFile, edit: Edit): void {
-  const matches = findMatches(file.original, edit.oldText)
-  if (matches.length === 0) throw new Error(`oldText 在 ${edit.path} 中不存在`)
-  if (!edit.replaceAll && matches.length > 1) {
-    throw new Error(`oldText 在 ${edit.path} 中出现多次；请提供更长上下文或设置 replaceAll=true`)
-  }
-  for (const match of edit.replaceAll ? matches : matches.slice(0, 1)) {
-    file.replacements.push({ ...match, newText: edit.newText })
-  }
-}
-
-function applyReplacements(file: StagedFile): string {
-  const replacements = [...file.replacements].sort((left, right) => left.start - right.start)
-  for (let index = 1; index < replacements.length; index++) {
-    const previous = replacements[index - 1]!
-    const current = replacements[index]!
-    if (current.start < previous.end) {
-      throw new Error(`对 ${file.displayPath} 的替换存在重叠或嵌套`)
+function stageEdit(normalized: string, edit: Edit, replacements: Replacement[]): void {
+  const oldText = edit.oldText.replace(/\r\n?/g, '\n')
+  const newText = edit.newText.replace(/\r\n?/g, '\n')
+  let start = normalized.indexOf(oldText)
+  if (start < 0) throw new Error(`oldText 在 ${edit.path} 中不存在`)
+  if (oldText === newText) throw new Error(`${edit.path} 的替换内容与原文相同`)
+  do {
+    const end = start + oldText.length
+    replacements.push({ start, end, newText })
+    start = normalized.indexOf(oldText, end)
+    if (start >= 0 && !edit.replaceAll) {
+      throw new Error(`oldText 在 ${edit.path} 中出现多次；请提供更长上下文或设置 replaceAll=true`)
     }
-  }
+  } while (start >= 0)
+}
 
-  let updated = file.original
-  for (const replacement of replacements.reverse()) {
-    updated =
-      updated.slice(0, replacement.start)
-      + replacement.newText
-      + updated.slice(replacement.end)
+function applyReplacements(original: string, edits: Edit[]): string {
+  const normalized = original.replace(/\r\n?/g, '\n')
+  const replacements: Replacement[] = []
+  for (const edit of edits) stageEdit(normalized, edit, replacements)
+  // 匹配按逻辑换行定位，写回时单向映射到原始字符位置，未编辑的字节原样保留。
+  const breaks = /\r\n|\r|\n/g
+  let nextBreak = breaks.exec(original)
+  let extra = 0
+  let previousEol = '\n'
+  function originalOffset(offset: number): number {
+    while (nextBreak && nextBreak.index < offset + extra) {
+      previousEol = nextBreak[0]
+      extra += previousEol.length - 1
+      nextBreak = breaks.exec(original)
+    }
+    return offset + extra
   }
+  let cursor = 0
+  const parts: string[] = []
+  for (const replacement of replacements.sort((a, b) => a.start - b.start)) {
+    const start = originalOffset(replacement.start)
+    if (start < cursor) {
+      throw new Error(`对 ${edits[0]!.path} 的替换存在重叠或嵌套`)
+    }
+    const eol = nextBreak?.[0] ?? previousEol
+    parts.push(original.slice(cursor, start), eol === '\n' ? replacement.newText : replacement.newText.replaceAll('\n', eol))
+    cursor = originalOffset(replacement.end)
+  }
+  parts.push(original.slice(cursor))
+  let updated = parts.join('')
+  if (original.startsWith('\uFEFF') && !updated.startsWith('\uFEFF')) updated = '\uFEFF' + updated
+  if (updated === original) throw new Error(`${edits[0]!.path} 的替换内容与原文相同`)
   return updated
 }
 
-async function stageChanges(input: EditFileInput, ctx: ToolContext): Promise<StagedFile[]> {
-  const files = new Map<string, StagedFile>()
+async function groupEdits(input: EditFileInput, ctx: ToolContext) {
+  const io = ctx.workspaceIO ?? localWorkspaceIO
+  const groups = new Map<string, { absolute: string; edits: Edit[] }>()
   for (const edit of input.edits) {
     const absolute = await resolveAllowed(ctx, edit.path)
-    const key = workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, absolute)
-    let file = files.get(key)
-    if (!file) {
-      const original = await (ctx.workspaceIO ?? localWorkspaceIO).fs.readFile(absolute, 'utf8')
-      file = {
-        absolute,
-        displayPath: edit.path,
-        original,
-        replacements: [],
-        updated: original,
-      }
-      files.set(key, file)
-    }
-    stageEdit(file, edit)
+    const key = workspacePathKey(io, absolute)
+    const group = groups.get(key)
+    if (group) group.edits.push(edit)
+    else groups.set(key, { absolute, edits: [edit] })
   }
-
-  for (const file of files.values()) file.updated = applyReplacements(file)
-  return [...files.values()]
+  return [...groups.values()]
 }
 
-async function resolvedEditPaths(input: EditFileInput, ctx: ToolContext): Promise<string[]> {
-  const paths = new Map<string, string>()
-  for (const edit of input.edits) {
-    const absolute = await resolveAllowed(ctx, edit.path)
-    paths.set(workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, absolute), absolute)
+async function stageChanges(input: EditFileInput, ctx: ToolContext): Promise<StagedFile[]> {
+  const io = ctx.workspaceIO ?? localWorkspaceIO
+  const files: StagedFile[] = []
+  for (const { absolute, edits } of await groupEdits(input, ctx)) {
+    const displayPath = edits[0]!.path
+    const original = decodeWorkspaceText(await io.fs.readFile(absolute))
+    if (original === undefined) throw new Error(`${displayPath} 不是可编辑的 UTF-8 文本`)
+    files.push({ absolute, displayPath, original, updated: applyReplacements(original, edits) })
   }
-  return [...paths.values()]
+  return files
 }
 
 export const editFileTool = buildTool({
@@ -131,15 +131,10 @@ export const editFileTool = buildTool({
   extractPaths: (input) => [...new Set(input.edits.map((edit) => edit.path))],
   checkpointScope: async (input, ctx) => ({
     kind: 'exact-files',
-    paths: await resolvedEditPaths(input, ctx),
+    paths: (await groupEdits(input, ctx)).map(group => group.absolute),
   }),
   async renderDiff(input, ctx) {
-
-    const files = await stageChanges(input, ctx)
-    return files
-      .map((file) => makeDiff(file.displayPath, file.original, file.updated))
-      .filter(Boolean)
-      .join('\n\n')
+    return makeDiff(await stageChanges(input, ctx))
   },
   async execute(input, ctx) {
     const io = ctx.workspaceIO ?? localWorkspaceIO
