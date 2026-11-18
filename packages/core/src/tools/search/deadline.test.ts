@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
+import { tmpdir } from 'node:os'
 import { posix } from 'node:path'
 import { it } from 'node:test'
 import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
@@ -23,6 +24,22 @@ class SearchProcess extends EventEmitter implements WorkspaceProcess {
     return true
   }
 }
+
+it('Glob 跳过超过 1 MiB 的已读前缀后仍给出当前页和正确续页位置', async () => {
+  const name = (n: number) => String(n).padStart(5, '0') + '-' + 'a'.repeat(210) + '.txt'
+  const io: WorkspaceIO = { ...localWorkspaceIO, ripgrep: () => {
+    const child = new SearchProcess()
+    setImmediate(() => {
+      child.stdout.end(Array.from({ length: 6_000 }, (_, n) => name(n)).join('\n'))
+      if (!child.stopped) child.emit('close', 0)
+    })
+    return child
+  } }
+  const result = await globTool.execute({ pattern: '*.txt', offset: 5_200, limit: 2 }, {
+    projectDir: tmpdir(), workspaceIO: io, additionalDirs: [], abortSignal: new AbortController().signal,
+  })
+  assert.equal(result.data, `${name(5_200)}\n${name(5_201)}\n[用 offset=5202 继续]`)
+})
 
 for (const tool of [globTool, grepTool]) {
   it(`${tool.name} 整次执行超时会停止远端进程并返回错误，后续搜索仍可用`, async t => {

@@ -4,6 +4,7 @@ import { buildTool } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { makeDiff } from './diff.ts'
 import { describeFileChange } from '../file-changes.ts'
+import { readFileTextPreview } from '../../checkpoints/file-history.ts'
 
 export const WRITE_FILE_TOOL_NAME = 'WriteFile'
 
@@ -26,11 +27,15 @@ export const writeFileTool = buildTool({
     paths: [await resolveAllowed(ctx, input.path)],
   }),
   async renderDiff(input, ctx) {
-    const { readFile } = (ctx.workspaceIO ?? localWorkspaceIO).fs
-
     const abs = await resolveAllowed(ctx, input.path)
-    const old = await readFile(abs, 'utf8').catch(() => '')
-    return makeDiff(input.path, old, input.content)
+    const before = await readFileTextPreview(abs, ctx.workspaceIO).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined
+      throw error
+    })
+    if (before?.kind === 'unavailable') {
+      return `${input.path}（${before.reason === 'binary' ? '原文件不是 UTF-8 文本' : '原文件超过 512 KiB'}，已省略差异预览）`
+    }
+    return makeDiff([{ displayPath: input.path, original: before?.kind === 'text' ? before.content : '', updated: input.content }])
   },
   async execute(input, ctx) {
     const io = ctx.workspaceIO ?? localWorkspaceIO

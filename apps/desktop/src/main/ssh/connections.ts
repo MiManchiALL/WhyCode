@@ -43,7 +43,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
   private readonly states = new Map<string, ConnectionState>()
   private readonly configurationOperations = new Set<{ id: string; key: string | null; done: Promise<void> }>()
   readonly store: SshConnectionStore
-  private readonly resources: string
+  readonly resources: string
   constructor(store: SshConnectionStore, resources: string) { super(); this.store = store; this.resources = resources }
   status(id: string): SshConnectionStatus { return this.states.get(id)?.status ?? 'disconnected' }
   isConnected(id: string): boolean { return this.states.get(id)?.status === 'connected' }

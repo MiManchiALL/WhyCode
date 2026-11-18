@@ -19,7 +19,7 @@ import { parseMcpOAuthSession, type McpOAuthSession } from './mcp-oauth-state.ts
 import { DesktopMcpOAuthProvider } from './mcp-oauth-provider.ts'
 
 describe('MCP OAuth', () => {
-  it('按标准发现、动态注册与 PKCE 回调保存令牌，并按 URL 指纹供运行时复用', async () => {
+  it('完成发现、动态注册和 PKCE 回调，运行时按原签发方刷新令牌', async () => {
     const discovery: { authorizationServerUrl?: string } = {}
     const oauth = await createOAuthFixture(discovery)
     const otherIssuer = await createOAuthFixture()
@@ -65,6 +65,13 @@ describe('MCP OAuth', () => {
       assert.equal(sessions[0]?.clientInformation?.issuer, oauth.origin)
       const runtimeTransport = controller.runtimeTransport(config)
       assert.ok(runtimeTransport)
+      assert.equal(await auth(runtimeTransport.authProvider, {
+        serverUrl: config.url, fetchFn: runtimeTransport.fetchImpl,
+      }), 'AUTHORIZED')
+      assert.equal(oauth.lastTokenRequest()?.get('grant_type'), 'refresh_token')
+      assert.equal(oauth.registrationCount(), 1)
+      assert.equal(sessions[0]?.tokens?.access_token, 'refreshed-token')
+      assert.equal(sessions[0]?.tokens?.issuer, oauth.origin)
       await assert.rejects(
         runtimeTransport.fetchImpl('http://auth.example.test/token'),
         /网络请求只允许 HTTPS/,
@@ -354,12 +361,16 @@ async function createOAuthFixture(options: {
         tokenExchanges++
         const params = new URLSearchParams(body)
         lastTokenRequest = params
-        assert.equal(params.get('grant_type'), 'authorization_code')
-        assert.equal(params.get('code'), 'accepted-code')
-        assert.ok(params.get('code_verifier'))
+        const refresh = params.get('grant_type') === 'refresh_token'
+        if (refresh) assert.equal(params.get('refresh_token'), 'refresh-token')
+        else {
+          assert.equal(params.get('grant_type'), 'authorization_code')
+          assert.equal(params.get('code'), 'accepted-code')
+          assert.ok(params.get('code_verifier'))
+        }
         if (dynamicRegistration) assert.equal(params.get('client_id'), 'dynamic-client')
         json(response, {
-          access_token: 'access-token',
+          access_token: refresh ? 'refreshed-token' : 'access-token',
           refresh_token: 'refresh-token',
           token_type: 'bearer',
           scope: 'read',

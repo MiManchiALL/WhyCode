@@ -1,4 +1,5 @@
 import { localWorkspaceIO, type WorkspaceIO, type WorkspaceReader } from '../workspace/io.ts'
+import { decodeWorkspaceText } from '../workspace/read.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { link, mkdir, rm } from 'node:fs/promises'
@@ -180,16 +181,8 @@ async function readFromStart(file: WorkspaceReader, buffer: Buffer): Promise<num
 }
 
 export function decodeTextPreview(content: Buffer): CheckpointFilePreviewState {
-  if (content.includes(0)) {
-    return { kind: 'unavailable', reason: 'binary', size: content.length }
-  }
-  try {
-    return {
-      kind: 'text',
-      content: new TextDecoder('utf-8', { fatal: true }).decode(content),
-      size: content.length,
-    }
-  } catch {
-    return { kind: 'unavailable', reason: 'binary', size: content.length }
-  }
+  const text = decodeWorkspaceText(content)
+  return text === undefined
+    ? { kind: 'unavailable', reason: 'binary', size: content.length }
+    : { kind: 'text', content: text, size: content.length }
 }

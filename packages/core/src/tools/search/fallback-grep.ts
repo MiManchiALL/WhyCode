@@ -1,60 +1,60 @@
-import { matchFallback } from './fallback-worker.ts'
-import type { WorkspaceIO } from '../../workspace/io.ts'
-import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
+import { localWorkspaceIO } from '../../workspace/io.ts'
+import { readBoundedWorkspaceFile, WorkspaceFileTooLargeError } from '../../workspace/read.ts'
 import { displayToolPath } from '../fs-utils.ts'
-import { collectFiles, globToRegExp } from './fallback.ts'
+import { incompleteScan, walkSearchFiles } from './fallback.ts'
+import { matchFallbackBatches, type GrepOptions, type SearchFile } from './fallback-worker.ts'
+import type { SearchPage } from './page.ts'
+import type { Minimatch } from 'minimatch'
+import type { ToolContext } from '../tool.ts'
 
-export type GrepOutputMode = 'content' | 'files_with_matches' | 'count'
-interface Options {
-  io: WorkspaceIO
-  root: string
-  onlyFile?: string
-  projectDir: string
-  pattern: string
-  include?: string
-  mode: GrepOutputMode
-  caseSensitive: boolean
-  literal: boolean
-  context: number
-  signal: AbortSignal
-  resultLimit: number
-}
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const READ_BATCH_SIZE = 16
 
-export async function fallbackGrep(options: Options): Promise<{ lines: string[]; truncated: boolean }> {
-  const { stat } = options.io.fs
-  const { relative } = options.io.path
-  const collected = options.onlyFile
-    ? { files: [options.onlyFile], truncated: false }
-    : await collectFiles(options.root, options.signal, options.io)
-  const candidates = options.include
-    ? (await matchFallback({
-        kind: 'glob', files: collected.files.map(path => relative(options.root, path).replaceAll('\\', '/')),
-        expression: globToRegExp(options.include).source, limit: collected.files.length,
-      }, options.signal)).map(path => options.io.path.join(options.root, path))
-    : collected.files.sort()
-  const results: string[] = []
-  for (let start = 0; start < Math.max(candidates.length, 1); start += READ_BATCH_SIZE) {
-    options.signal.throwIfAborted()
-    const contents = await Promise.all(candidates.slice(start, start + READ_BATCH_SIZE).map(async path => {
-      try {
-        const metadata = await stat(path)
-        options.signal.throwIfAborted()
-        if (metadata.size > MAX_FILE_BYTES) return []
-        const bytes = await readBoundedWorkspaceFile(path, MAX_FILE_BYTES, options.io, options.signal)
-        if (bytes.subarray(0, 512).includes(0)) return []
-        return [{ path: displayToolPath(options.projectDir, options.root, relative(options.root, path), options.io), text: bytes.toString('utf8') }]
-      } catch (error) {
-        if (['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) return []
-        throw error
-      }
-    }))
-    results.push(...await matchFallback({
-      kind: 'grep', files: contents.flat(), limit: options.resultLimit - results.length,
-      pattern: options.pattern, literal: options.literal, caseSensitive: options.caseSensitive, mode: options.mode, context: options.context,
-    }, options.signal))
-    if (results.length >= options.resultLimit) break
+export async function fallbackGrep(
+  scope: { root: string; onlyFile?: string; include?: Minimatch },
+  options: GrepOptions, page: SearchPage, ctx: ToolContext,
+) {
+  const { root, onlyFile, include } = scope
+  const { projectDir, abortSignal: signal } = ctx
+  const io = ctx.workspaceIO ?? localWorkspaceIO
+  const status = { limited: false, unreadable: 0 }
+  let large = 0
+  let binary = false
+  async function read(path: string): Promise<SearchFile | undefined> {
+    try {
+      const bytes = await readBoundedWorkspaceFile(path, MAX_FILE_BYTES, io, signal)
+      if (bytes.subarray(0, 512).includes(0)) { binary = true; return }
+      return { path: displayToolPath(projectDir, root, path, io), text: bytes.toString('utf8') }
+    } catch (error) {
+      if (error instanceof WorkspaceFileTooLargeError) { large++; return }
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') { status.unreadable++; return }
+      throw error
+    }
   }
-  return { lines: results, truncated: collected.truncated || results.length >= options.resultLimit }
+  async function* batches() {
+    const files = onlyFile ? [onlyFile] : walkSearchFiles(root, signal, io, status, projectDir)
+    let paths: string[] = []
+    const readBatch = async () => {
+      const files: SearchFile[] = []
+      for (const result of await Promise.allSettled(paths.map(read))) {
+        if (result.status === 'rejected') throw result.reason
+        if (result.value) files.push(result.value)
+      }
+      return files
+    }
+    for await (const path of files) {
+      if (include && !include.match(io.path.relative(root, path).replaceAll('\\', '/'))) continue
+      paths.push(path)
+      if (paths.length === READ_BATCH_SIZE) { yield await readBatch(); paths = [] }
+    }
+    // 空批次也让 Worker 报告无效正则。
+    yield await readBatch()
+  }
+  await matchFallbackBatches(options, batches(), signal, page)
+  if (onlyFile && (large || binary || status.unreadable)) {
+    const reason = large ? '文件超过回退搜索的 2 MiB 上限' : binary ? '二进制文件' : '文件不可读取'
+    return { data: `未搜索 ${displayToolPath(projectDir, root, onlyFile, io)}：${reason}`, isError: true }
+  }
+  return page.result('（无匹配）', incompleteScan(status, large))
 }
