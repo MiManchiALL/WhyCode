@@ -208,9 +208,6 @@ export class TaskPlanController {
       item.outcome = outcome
     }
     if (change.status === 'completed') {
-      if (item.status !== 'in_progress') {
-        return mutationFailure('invalid_transition', `${change.item_id} 必须先进入 in_progress 才能完成。`)
-      }
       if (!change.evidence?.length) {
         return mutationFailure('evidence_required', `完成 ${change.item_id} 需要可核验的 evidence。`)
       }

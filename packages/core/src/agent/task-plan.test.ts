@@ -40,7 +40,7 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(await accepts([edit]), false)
   })
 
-  it('并行里程碑最后一次工具更新即关闭，后续模型请求和界面看到同一结果', async () => {
+  it('同批完成进行中项和待办验证项后自动关闭，模型和界面看到同一结果', async () => {
     const model = modelWithSteps([
       toolStep(TASK_PLAN_TOOL_NAME, {
         action: 'create',
@@ -53,10 +53,9 @@ describe('Main 长任务端到端控制', () => {
       }),
       toolStep(TASK_PLAN_TOOL_NAME, { action: 'update', changes: [
         { action: 'edit', item_id: 'T1', status: 'completed', evidence: ['实现文件已检查'] },
-        { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['调用检查通过'] },
-        { action: 'edit', item_id: 'T3', status: 'in_progress' },
       ] }),
       toolStep(TASK_PLAN_TOOL_NAME, { action: 'update', changes: [
+        { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['调用检查通过'] },
         { action: 'edit', item_id: 'T3', status: 'completed', evidence: ['自动化测试通过'] },
       ] }),
       finalStep('全部完成'),
@@ -68,14 +67,14 @@ describe('Main 长任务端到端控制', () => {
     assert.deepEqual(updates.map(event => event.plan.status), ['active', 'active', 'completed'])
     assert.deepEqual(updates.map(event => event.plan.items.map(item => item.status)), [
       ['in_progress', 'in_progress', 'pending'],
-      ['completed', 'completed', 'in_progress'],
+      ['completed', 'in_progress', 'pending'],
       ['completed', 'completed', 'completed'],
     ])
     const results = events.filter(event => event.type === 'tool-end')
     assert.equal(results.length, 3)
     assert.deepEqual(results.map(event => event.result), [
       '已建立计划「交付可靠功能」，进度 0/3。\nT1 [in_progress] 核心功能已经实现\nT2 [in_progress] 相关调用已经统一\nT3 [pending] 完整功能通过验证（整体验证）',
-      '已完成 T1「核心功能已经实现」。\n已完成 T2「相关调用已经统一」。\n已开始 T3，进度 2/3。进行中：T3「完整功能通过验证」。',
+      '已完成 T1「核心功能已经实现」，进度 1/3。进行中：T2「相关调用已经统一」。',
       '计划已完成并自动关闭，进度 3/3。',
     ])
     for (const [index, event] of results.entries()) {
