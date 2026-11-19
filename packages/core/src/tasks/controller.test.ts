@@ -94,8 +94,6 @@ describe('Main 长任务计划控制器', () => {
 
   it('插入和删除按提交后的顺序编号，同批编辑始终指向调用前的项', () => {
     const controller = activeController()
-    controller.update([{ action: 'edit', item_id: 'T2', status: 'in_progress' }])
-    commit(controller)
     const changed = controller.update([
       { action: 'add', outcome: '兼容旧配置', after_item_id: 'T1', status: 'in_progress' },
       { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['调用方已通过集成测试'] },
@@ -120,7 +118,7 @@ describe('Main 长任务计划控制器', () => {
 
     for (const change of [
       { action: 'delete', item_id: 'T3' },
-      { action: 'edit', item_id: 'T2', status: 'completed', evidence: ['尚未开始'] },
+      { action: 'edit', item_id: 'T2', status: 'completed' },
       { action: 'edit', item_id: 'T1', status: 'completed', evidence: [] },
       { action: 'edit', item_id: 'T2', after_item_id: 'T3' },
     ] satisfies TaskPlanItemChange[]) {
