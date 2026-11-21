@@ -147,7 +147,8 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
       return finalStream('完成。')
     }, undefined, {
       ...documents,
-      createWebPageTools: (journal) => [createWebFetchTool({
+      createWebFetch: (journal) => createWebFetchTool({
+        findInPage: async () => assert.fail('未请求缓存查找'),
         fetchPage: async (request, signal) => {
           const transaction = await preparePdfAttachmentImport(
             [{ kind: 'bytes', name: 'paper.pdf', bytes: Buffer.from('%PDF-1.4\npaper') }],
@@ -157,7 +158,7 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
           attachment = { ...transaction.attachments[0]!, origin: 'web' }
           return { kind: 'pdf', requestedUrl: request.url, finalUrl: request.url, contentType: 'application/pdf', attachment }
         },
-      })],
+      }),
     })
     fixture.runtime.requestApproval = async () => ({ approved: true })
     const id = await launch(fixture)

@@ -87,9 +87,9 @@ function knownToolSummary(
     case 'WebSearch':
       return parts(querySummary(input.query), fixed(recencySummary(input)))
     case 'WebFetch':
-      return parts(text(input, 'url'), fixed(lineRange(input, 'offset', 'limit')))
-    case 'WebFind':
-      return parts(quote(text(input, 'pattern')), text(input, 'url'))
+      return input.pattern === undefined
+        ? parts(text(input, 'url'), fixed(lineRange(input, 'offset', 'limit')))
+        : parts(quote(querySummary(input.pattern, '、')), text(input, 'url'))
     case 'AnalyzeImage':
       return parts(inlineText(input.question), fixed(arrayCount(input, 'attachmentIds', 'image', 'images')))
     case 'CaptureScreenshot':
@@ -183,13 +183,13 @@ function fileCount(paths: readonly string[]): string {
   return count(paths.length, 'file', 'files')
 }
 
-function querySummary(value: unknown): string {
+function querySummary(value: unknown, separator = ' '): string {
   const queries = typeof value === 'string'
     ? [value]
     : Array.isArray(value)
       ? value.filter((item): item is string => typeof item === 'string')
       : []
-  return queries.map(inlineText).filter(Boolean).join(' ')
+  return queries.map(inlineText).filter(Boolean).join(separator)
 }
 
 function recencySummary(input: ToolInput): string {

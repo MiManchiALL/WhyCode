@@ -21,17 +21,17 @@ const AGENT_METADATA_KEYS = new Set(['name', 'description', 'profile'])
 const PROFILE_TOOLS: Record<SubagentProfile, readonly string[]> = {
   explore: [
     'ReadFile', 'ListDir', 'Glob', 'Grep',
-    'WebSearch', 'WebFetch', 'WebFind', 'Skill',
+    'WebSearch', 'WebFetch', 'Skill',
     'CaptureScreenshot',
   ],
   reviewer: [
     'ReadFile', 'ListDir', 'Glob', 'Grep', 'RunCommand',
-    'WebSearch', 'WebFetch', 'WebFind', 'Skill',
+    'WebSearch', 'WebFetch', 'Skill',
     'CaptureScreenshot',
   ],
   general: [
     'ReadFile', 'ListDir', 'Glob', 'Grep', 'WriteFile', 'EditFile',
-    'RunCommand', 'WebSearch', 'WebFetch', 'WebFind', 'CaptureScreenshot', 'Skill',
+    'RunCommand', 'WebSearch', 'WebFetch', 'CaptureScreenshot', 'Skill',
   ],
 }
 

@@ -40,7 +40,6 @@ import {
   createCommandTools,
   createAuxiliaryImageAnalyzer,
   createWebFetchTool,
-  createWebFindTool,
   createWebSearchTool,
   ensureMcpConfigTemplate,
   ensureProjectMcpConfigTemplate,
@@ -238,7 +237,7 @@ import {
   createElectronWebHostResolver,
   createElectronWebPageFetch,
 } from './web-page/electron-fetch.ts'
-import { createWebDocumentFetcher } from './web-page/network.ts'
+import { createWebDocumentFetcher, fetchLinkedMarkdown } from './web-page/network.ts'
 import { createConfiguredWebDocumentFetcher } from './web-page/configured.ts'
 import { createWebPageReader } from './web-page/reader.ts'
 import {
@@ -348,7 +347,7 @@ const webSearchTool = createWebSearchTool({
   }),
 })
 
-function createSessionWebPageTools(recorder: SessionJournal) {
+function createSessionWebFetch(recorder: SessionJournal) {
   const fetchDocument = createConfiguredWebDocumentFetcher({
     getConfig: loadAppConfig,
     fetchImpl: (input, init) => net.fetch(input, init),
@@ -357,6 +356,7 @@ function createSessionWebPageTools(recorder: SessionJournal) {
   })
   const reader = createWebPageReader({
     fetchDocument,
+    fetchLinkedMarkdown: (url, pageUrl, signal) => fetchLinkedMarkdown(url, pageUrl, publicWeb, signal),
     extractDocument: extractWebTextDocument,
     importPdfDocument: (document, abortSignal) => importWebPdfDocument(
       document,
@@ -368,10 +368,7 @@ function createSessionWebPageTools(recorder: SessionJournal) {
       abortSignal,
     ),
   })
-  return [
-    createWebFetchTool({ fetchPage: reader.fetchPage }),
-    createWebFindTool({ findInPage: reader.findInPage }),
-  ]
+  return createWebFetchTool(reader)
 }
 
 const browserGuests = new BrowserGuests(process.env.ELECTRON_RENDERER_URL)
@@ -941,7 +938,7 @@ async function createMainAgentSession(
         commandTools.manageCommand,
         ...subagents.createTools(runtime, recorder, targetProjectDir),
         webSearchTool,
-        ...createSessionWebPageTools(recorder),
+        createSessionWebFetch(recorder),
       ],
       captureScreenshot: remote ? undefined : captureSessionScreenshot,
       browser: browserAgent.forRuntime(runtime.runtimeId),
@@ -2994,7 +2991,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     definitions: subagentDefinitions,
     skills,
     webSearchTool,
-    createWebPageTools: createSessionWebPageTools,
+    createWebFetch: createSessionWebFetch,
     selectModel: (parent: SubagentModelSnapshot) =>
       resolveSubagentModelSelection(loadAppConfig(), parent),
     resolveModel: (modelId) => {

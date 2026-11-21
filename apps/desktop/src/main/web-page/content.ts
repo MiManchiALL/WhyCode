@@ -11,6 +11,10 @@ export interface ExtractedWebPage {
   sourceTruncated: boolean
 }
 
+export interface WebPageExtraction extends ExtractedWebPage {
+  markdownUrl?: string
+}
+
 export interface WebPageContentSource {
   requestedUrl: string
   finalUrl: string

@@ -9,6 +9,7 @@ import {
   SkillCatalogService,
   SubagentDefinitionCatalogService,
   createWebSearchTool,
+  createWebFetchTool,
   localWorkspace,
   type ModelEntry,
   type SubagentModelSnapshot,
@@ -21,7 +22,7 @@ import { SubagentService, type SubagentServiceOptions } from './subagent-service
 
 type ModelCall = Parameters<Extract<ReturnType<ModelEntry['create']>, { specificationVersion: 'v4' }>['doStream']>[0]
 interface FixtureOptions extends Partial<Pick<SubagentServiceOptions,
-  'pdfProcessor' | 'prepareSkillRuntime' | 'captureScreenshot' | 'createWebPageTools' | 'onEvent'>> {
+  'pdfProcessor' | 'prepareSkillRuntime' | 'captureScreenshot' | 'createWebFetch' | 'onEvent'>> {
   supportsImageInput?: boolean
   parentSupportsImageInput?: boolean
 }
@@ -91,7 +92,10 @@ export async function createFixture(
     definitions: new SubagentDefinitionCatalogService({ homeDir: root }),
     skills: new SkillCatalogService({ homeDir: root }),
     webSearchTool: createWebSearchTool({ search: async () => ({ results: [] }) }),
-    createWebPageTools: options.createWebPageTools ?? (() => []),
+    createWebFetch: options.createWebFetch ?? (() => createWebFetchTool({
+      fetchPage: async () => assert.fail('未配置网页读取'),
+      findInPage: async () => assert.fail('未配置网页查找'),
+    })),
     selectModel,
     resolveModel: (modelId) => {
       resolvedModelIds.push(modelId)

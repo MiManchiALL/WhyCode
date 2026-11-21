@@ -46,9 +46,10 @@ describe('配置化网页抓取', () => {
     assert.deepEqual(calls, ['builtin', 'https://api.deepseek.com/v1/tools/fetch'])
   })
 
-  it('DeepSeek 正文复用稳定分页、标题、WebFind 与有界会话缓存', async () => {
+  it('DeepSeek 正文复用稳定分页、标题、缓存查找 与有界会话缓存', async () => {
     let calls = 0
     const reader = createWebPageReader({
+      fetchLinkedMarkdown: async () => assert.fail('DeepSeek 已返回 Markdown'),
       fetchDocument: createConfiguredWebDocumentFetcher({
         getConfig: () => configured, resolveHost, fetchBuiltin: unusedBuiltin,
         fetchImpl: async () => {
@@ -69,7 +70,7 @@ describe('配置化网页抓取', () => {
     assert.equal(next.kind, 'page')
     if (next.kind !== 'page') assert.fail()
     assert.deepEqual(next.lines, ['needle', 'last'])
-    const found = await reader.findInPage({ url: 'https://example.com/', pattern: 'needle', context: 1, maxResults: 10 }, signal)
+    const found = await reader.findInPage({ url: 'https://example.com/', patterns: ['needle'], maxResults: 10 }, signal)
     assert.equal(found.matches[0]?.lineNumber, 4)
     assert.ok(first.totalLines < WEB_PAGE_MAX_CONTENT_CHARS)
     assert.equal(calls, 1)
@@ -112,6 +113,7 @@ describe('配置化网页抓取', () => {
     await assert.rejects(fetchDocument('https://example.com/', signal), /尚未配置/)
     assert.equal(calls, 0)
     const missingKeyTool = createWebFetchTool({
+      findInPage: async () => assert.fail(),
       fetchPage: async () => { await fetchDocument('https://example.com/', signal); assert.fail() },
     })
     const missing = await missingKeyTool.execute({ url: 'https://example.com/' }, {

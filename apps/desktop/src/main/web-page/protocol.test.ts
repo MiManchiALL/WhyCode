@@ -53,4 +53,16 @@ describe('网页提取子进程协议', () => {
       },
     }, request), false)
   })
+
+  it('替代地址只接受已解析且属于当前最终页面的 URL', () => {
+    const result = { requestedUrl: request.document.requestedUrl, finalUrl: request.document.finalUrl,
+      contentType: 'text/html', lines: ['content'], sourceTruncated: false }
+    const accepts = (markdownUrl: unknown) => isWebPageWorkerResponse({
+      id: request.id, ok: true, result: { ...result, markdownUrl },
+    }, request)
+    assert.equal(accepts('https://example.com/final.md'), true)
+    for (const url of [undefined, 42, 'final.md', 'https://user:pw@example.com/final.md', 'https://internal.example/final.md', 'https://example.com/llms.txt']) {
+      assert.equal(accepts(url), false)
+    }
+  })
 })

@@ -28,7 +28,7 @@ interface SubagentSessionFactoryOptions {
   scratch: SessionScratchManager
   skills: SkillCatalogService
   webSearchTool: ToolDefinition
-  createWebPageTools: (journal: SessionJournal) => ToolDefinition[]
+  createWebFetch: (journal: SessionJournal) => ToolDefinition
   resolveModel: (modelId: string) => ResolvedSubagentModel | null
   pdfProcessor: PdfProcessor
   prepareSkillRuntime: PrepareSkillRuntime
@@ -56,7 +56,7 @@ export async function createSubagentAgentSession(
   if (!parentPermission) throw new Error('父会话权限上下文已释放')
   const mainTools = [
     options.webSearchTool,
-    ...options.createWebPageTools(options.journal),
+    options.createWebFetch(options.journal),
   ]
   return new AgentSession({
     workspaceIO: io,
