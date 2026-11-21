@@ -54,7 +54,7 @@ describe('子代理控制与被动恢复', { timeout: 30_000 }, () => {
       assert.match(JSON.stringify(call.prompt), /补充核验范围/)
       return finalStream('完成补充核验。')
     }, undefined, {
-      createWebPageTools: () => [buildTool({
+      createWebFetch: () => buildTool({
         name: 'WebFetch', description: '等待边界', prompt: '等待', inputSchema: z.object({}),
         kind: 'read', isReadOnly: true,
         async execute(_input, context) {
@@ -63,7 +63,7 @@ describe('子代理控制与被动恢复', { timeout: 30_000 }, () => {
           await release.promise
           return { data: '工具完整完成', isError: false }
         },
-      })],
+      }),
     })
     const [tool] = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     const ctx = fixture.toolContext('parent', 'spawn')

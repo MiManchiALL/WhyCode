@@ -35,6 +35,21 @@ export function parseWebPageUrl(value: string): URL {
   return url
 }
 
+/** 只接受页面自身的 Markdown 表示，排除整站索引及指向另一条记录的查询。 */
+export function pageMarkdownUrl(href: unknown, pageUrl: string, baseUrl = pageUrl): string | undefined {
+  if (typeof href !== 'string' || !href.trim() || href.length > WEB_PAGE_MAX_URL_CHARS) return
+  const page = new URL(pageUrl)
+  const url = URL.parse(href, baseUrl)
+  if (!url || url.origin !== page.origin || url.username || url.password) return
+  url.hash = ''
+  if (url.href === page.href || url.href.length > WEB_PAGE_MAX_URL_CHARS) return
+  for (const [key, value] of page.searchParams) {
+    if (key !== 'format' && !url.searchParams.getAll(key).includes(value)) return
+  }
+  const pagePath = (pathname: string) => pathname.replace(/(?:\/index)?\.(?:html?|md|markdown)$|\/$/iu, '')
+  if (pagePath(url.pathname) === pagePath(page.pathname)) return url.href
+}
+
 export async function assertPublicWebTarget(
   url: URL,
   resolveHost: WebHostResolver,

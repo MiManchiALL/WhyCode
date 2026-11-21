@@ -50,7 +50,7 @@ export interface ToolDefinition<
 
 export type ToolCheckpointScope = { kind: 'exact-files'; paths: string[] }
 
-export type ToolBehavior = Pick<ToolDefinition, 'kind' | 'isReadOnly'>
+export type ToolBehavior = Pick<ToolDefinition, 'kind' | 'isReadOnly' | 'initialApprovalReason'>
 
 export function toolBehavior(def: ToolDefinition, input: unknown): ToolBehavior {
   return def.behavior?.(input) ?? def

@@ -52,8 +52,10 @@ export function createWebDocumentFetcher(options: WebDocumentFetcherOptions) {
     const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? WEB_DOCUMENT_TIMEOUT_MS)
     const signal = AbortSignal.any([abortSignal, timeoutSignal])
     try {
-      const { response, finalUrl } = await fetchPublicWebResponse(initialUrl, options, signal,
-        'text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain;q=0.9,*/*;q=0.1')
+      const accept = initialUrl.pathname.toLowerCase().endsWith('.pdf')
+        ? 'application/pdf, */*;q=0.1'
+        : 'text/markdown, text/x-markdown, text/html;q=0.9, application/xhtml+xml;q=0.9, application/pdf;q=0.9, text/plain;q=0.8, */*;q=0.1'
+      const { response, finalUrl } = await fetchPublicWebResponse(initialUrl, options, signal, accept)
       const content = await readDocumentResponse(response, new URL(finalUrl))
       return { requestedUrl: initialUrl.toString(), finalUrl, ...content }
     } catch (error) {
@@ -65,12 +67,41 @@ export function createWebDocumentFetcher(options: WebDocumentFetcherOptions) {
   }
 }
 
+/** 一个显式声明的 Markdown 表示不可用时，调用方仍有已经提取的 HTML 正文。 */
+export async function fetchLinkedMarkdown(
+  url: string,
+  pageUrl: string,
+  options: WebDocumentFetcherOptions,
+  abortSignal: AbortSignal,
+): Promise<WebTextDocument | null> {
+  const target = parseWebPageUrl(url)
+  const signal = AbortSignal.any([abortSignal, AbortSignal.timeout(options.timeoutMs ?? WEB_DOCUMENT_TIMEOUT_MS)])
+  try {
+    const { response, finalUrl } = await fetchPublicWebResponse(target, options, signal,
+      'text/markdown, text/x-markdown, text/plain;q=0.8',
+      (next) => next.origin === target.origin && next.href !== pageUrl)
+    const { mediaType, charset } = parseContentType(response.headers.get('content-type'))
+    if (mediaType !== 'text/markdown' && mediaType !== 'text/x-markdown' && mediaType !== 'text/plain') {
+      await response.body?.cancel()
+      return null
+    }
+    const bytes = await readBoundedBody(response, WEB_DOCUMENT_MAX_BYTES)
+    const text = decodeWebDocument(bytes, charset, mediaType)
+    if (!text.trim() || text.includes('\u0000') || isPdf(bytes) || looksLikeHtmlPage(text)) return null
+    return { kind: 'text', requestedUrl: url, finalUrl, contentType: 'text/markdown', text }
+  } catch {
+    if (abortSignal.aborted) throw new WebPageError('网页读取已取消')
+    return null
+  }
+}
+
 /** 网页和站点图标共用同一公开地址、无凭据与逐跳重定向边界。 */
 export async function fetchPublicWebResponse(
   initialUrl: URL,
   options: WebDocumentFetcherOptions,
   signal: AbortSignal,
   accept: string,
+  allowRedirect?: (url: URL) => boolean,
 ): Promise<{ response: Response; finalUrl: string }> {
   let currentUrl = initialUrl
   for (let redirects = 0; ; redirects++) {
@@ -93,6 +124,7 @@ export async function fetchPublicWebResponse(
         throw new WebPageError('目标网站重定向次数过多')
       }
       currentUrl = redirectUrl(location, currentUrl)
+      if (allowRedirect && !allowRedirect(currentUrl)) throw new WebPageError('网页重定向超出本站范围')
       continue
     }
     if (!response.ok) {
@@ -119,10 +151,12 @@ async function readDocumentResponse(response: Response, url: URL): Promise<WebDo
   if (!isSupportedTextContentType(contentType)) {
     throw new WebPageError(`暂不支持读取此网页类型（${contentType || '未知类型'}）`)
   }
+  const text = decodeWebDocument(bytes, declaredType.charset, contentType)
   return {
     kind: 'text',
-    contentType,
-    text: decodeWebDocument(bytes, declaredType.charset, contentType),
+    contentType: (contentType === 'text/markdown' || contentType === 'text/x-markdown') && looksLikeHtmlPage(text)
+      ? 'text/html' : contentType,
+    text,
   }
 }
 
@@ -203,6 +237,16 @@ function isSupportedTextContentType(value: string): boolean {
     'text/plain',
     'text/x-markdown',
   ].includes(value)
+}
+
+function looksLikeHtmlPage(text: string): boolean {
+  let start = text.trimStart()
+  while (start.startsWith('<!--')) {
+    const end = start.indexOf('-->', 4)
+    if (end < 0) return false
+    start = start.slice(end + 3).trimStart()
+  }
+  return /^(?:<!doctype\s+html|<(?:html|head|body)(?:\s|>))/iu.test(start)
 }
 
 function isPdf(bytes: Uint8Array): boolean {

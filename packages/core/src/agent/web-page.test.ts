@@ -30,7 +30,10 @@ describe('WebFetch Agent 链路', () => {
           const fetchTool = (options.tools ?? []).find((tool) =>
             tool.type === 'function' && tool.name === WEB_FETCH_TOOL_NAME)
           assert.ok(fetchTool?.type === 'function')
-          assert.match(fetchTool.description ?? '', /不受信任的外部数据/)
+          assert.match(fetchTool.description ?? '', /已知 URL 时只需传 url/)
+          assert.deepEqual(fetchTool.inputSchema.required, ['url'])
+          assert.deepEqual(Object.keys(fetchTool.inputSchema.properties ?? {}), ['url', 'offset', 'limit', 'pattern', 'max_results'])
+          assert.ok(!options.tools?.some((tool) => tool.name === 'WebFind'))
           return toolStep()
         }
         assert.match(JSON.stringify(options.prompt), /目标网页需要登录或拒绝访问/)
@@ -42,6 +45,7 @@ describe('WebFetch Agent 链路', () => {
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       mainTools: [createWebFetchTool({
+        findInPage: async () => assert.fail(),
         fetchPage: async () => { throw new WebPageError('目标网页需要登录或拒绝访问') },
       })],
       emit: () => {},
@@ -56,6 +60,35 @@ describe('WebFetch Agent 链路', () => {
     assert.equal(await session.handleUserMessage('读取这个网页'), 'completed')
     assert.equal(modelCalls, 2)
     assert.equal(approvals, 1)
+  })
+
+  it('混用参数先被拒绝，缓存查找与随后的首次联网读取独立审批', async () => {
+    const url = 'https://example.com/guide'
+    const calls: string[] = []
+    const model = new MockLanguageModelV4({ doStream: [
+      toolStep({ url, pattern: 'cache', limit: 1 }, 'mixed'),
+      toolStep({ url, pattern: ['cache', 'page'] }, 'find'),
+      toolStep({ url, limit: 1 }, 'read'),
+      finalStep('完成。'),
+    ] })
+    const session = new AgentSession({
+      model: modelEntry(model), providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
+      mainTools: [createWebFetchTool({
+        findInPage: async () => { calls.push('find'); throw new WebPageError('缓存未命中，请先用 limit=1 读取') },
+        fetchPage: async () => {
+          calls.push('read')
+          return { kind: 'page', requestedUrl: url, finalUrl: url, contentType: 'text/plain',
+            lines: ['正文'], offset: 1, totalLines: 1, sourceTruncated: false }
+        },
+      })],
+      emit: () => {},
+      requestApproval: async () => { calls.push('approve'); return { approved: true } },
+    })
+    assert.equal(await session.handleUserMessage('查找网页关键词'), 'completed')
+    assert.deepEqual(calls, ['find', 'approve', 'read'])
+    assert.match(JSON.stringify(model.doStreamCalls[1]?.prompt), /查找和分页请分开调用/)
+    assert.match(JSON.stringify(model.doStreamCalls[2]?.prompt), /缓存未命中/)
   })
 
   it('远程 PDF 随工具 step 登记后可立即与重启后统一使用 ReadFile', async () => {
@@ -98,6 +131,7 @@ describe('WebFetch Agent 链路', () => {
         sessionRecorder: journal,
         pdfProcessor: processor,
         mainTools: [createWebFetchTool({
+          findInPage: async () => assert.fail(),
           fetchPage: async (request) => ({
             kind: 'pdf',
             requestedUrl: request.url,
@@ -155,6 +189,7 @@ describe('WebFetch Agent 链路', () => {
         sessionRecorder: journal,
         pdfProcessor: processor,
         mainTools: [createWebFetchTool({
+          findInPage: async () => assert.fail(),
           fetchPage: async (request) => ({
             kind: 'pdf',
             requestedUrl: request.url,
@@ -179,15 +214,15 @@ describe('WebFetch Agent 链路', () => {
   })
 })
 
-function toolStep() {
+function toolStep(input: Record<string, unknown> = { url: 'https://example.com/private' }, id = 'fetch-1') {
   return {
     stream: simulateReadableStream({
       chunks: [
         {
           type: 'tool-call' as const,
-          toolCallId: 'fetch-1',
+          toolCallId: id,
           toolName: WEB_FETCH_TOOL_NAME,
-          input: JSON.stringify({ url: 'https://example.com/private' }),
+          input: JSON.stringify(input),
         },
         {
           type: 'finish' as const,

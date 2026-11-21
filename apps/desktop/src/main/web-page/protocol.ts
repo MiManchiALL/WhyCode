@@ -4,9 +4,10 @@ import {
 } from '@whycode/core'
 import {
   WEB_PAGE_MAX_CONTENT_CHARS,
-  type ExtractedWebPage,
+  type WebPageExtraction,
 } from './content.ts'
 import type { WebTextDocument } from './network.ts'
+import { pageMarkdownUrl } from './url-safety.ts'
 
 export interface WebPageWorkerRequest {
   id: string
@@ -14,7 +15,7 @@ export interface WebPageWorkerRequest {
 }
 
 export type WebPageWorkerResponse =
-  | { id: string; ok: true; result: ExtractedWebPage }
+  | { id: string; ok: true; result: WebPageExtraction }
   | { id: string; ok: false; error: string }
 
 export function isWebPageWorkerResponse(
@@ -34,6 +35,8 @@ export function isWebPageWorkerResponse(
     || result.lines.length > WEB_PAGE_MAX_CONTENT_CHARS
     || result.requestedUrl.length > WEB_PAGE_MAX_URL_CHARS
     || result.finalUrl.length > WEB_PAGE_MAX_URL_CHARS
+    || ('markdownUrl' in result && (typeof result.markdownUrl !== 'string'
+      || pageMarkdownUrl(result.markdownUrl, result.finalUrl) !== result.markdownUrl))
     || ('title' in result && (typeof result.title !== 'string' || result.title.length > 500))
   ) return false
 

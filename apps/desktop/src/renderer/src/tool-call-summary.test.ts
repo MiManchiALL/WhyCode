@@ -36,7 +36,7 @@ describe('工具卡片关键参数摘要', () => {
     ['ManageCommand', { action: 'stop', taskId: '12345678-1234-4234-8234-123456789abc' }, 'stop · task ID 12345678…'],
     ['WebSearch', { query: ['WhyCode', 'agent UI'], domains: ['github.com'], recency: 'week' }, 'WhyCode agent UI · past week'],
     ['WebFetch', { url: 'https://example.com/', offset: 101, limit: 100 }, 'https://example.com/ · lines 101–200'],
-    ['WebFind', { url: 'https://example.com/', pattern: 'AgentSession' }, '“AgentSession” · https://example.com/'],
+    ['WebFetch', { url: 'https://example.com/', pattern: ['AgentSession', 'ToolContext'] }, '“AgentSession、ToolContext” · https://example.com/'],
     ['ReadFile', { path: 'screen.png' }, 'screen.png · high'],
     ['ReadFile', { path: 'diagram.svg', offset: 1, limit: 40 }, 'diagram.svg · lines 1–40'],
     ['AnalyzeImage', { question: '按钮是否对齐？', attachmentIds: ['a', 'b'] }, '按钮是否对齐？ · 2 images'],
@@ -128,7 +128,7 @@ describe('工具卡片关键参数摘要', () => {
     const cases: Array<[string, Record<string, unknown>, string[]]> = [
       ['Glob', { pattern: '**/*.tsx', path: 'apps' }, ['“**/*.tsx”', 'apps']],
       ['WebFetch', { url: 'https://example.com/', offset: 1, limit: 20 }, ['https://example.com/', 'lines 1–20']],
-      ['WebFind', { pattern: 'query', url: 'https://example.com/' }, ['“query”', 'https://example.com/']],
+      ['WebFetch', { pattern: 'query', url: 'https://example.com/' }, ['“query”', 'https://example.com/']],
       ['ToolSearch', { query: 'search', max_results: 5 }, ['“search”', 'max results 5']],
       ['Mcp__files__search', { query: 'query · literal', path: 'apps', apiKey: 'hidden' }, ['query: query · literal', 'path: apps']],
     ]

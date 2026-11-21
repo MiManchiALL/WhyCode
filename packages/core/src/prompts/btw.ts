@@ -6,11 +6,11 @@ import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME } from '../tools/list-glob/index.ts'
 import { GREP_TOOL_NAME } from '../tools/grep/index.ts'
 import { WEB_SEARCH_TOOL_NAME } from '../tools/web-search/prompt.ts'
-import { WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME } from '../tools/web-page/prompt.ts'
+import { WEB_FETCH_TOOL_NAME } from '../tools/web-page/prompt.ts'
 
 export const BTW_TOOL_NAMES: ReadonlySet<string> = new Set([
   READ_FILE_TOOL_NAME, LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME,
-  WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME, PRESENT_TOOL_NAME,
+  WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, PRESENT_TOOL_NAME,
 ])
 
 export const BTW_SYSTEM_PROMPT = 'BTW 是临时问答。收到宿主的 <whycode-btw> 标记时，'

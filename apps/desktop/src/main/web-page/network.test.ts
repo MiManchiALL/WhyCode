@@ -4,6 +4,7 @@ import {
   WEB_DOCUMENT_MAX_BYTES,
   WEB_PDF_MAX_BYTES,
   createWebDocumentFetcher,
+  fetchLinkedMarkdown,
   type WebPageFetchInit,
 } from './network.ts'
 
@@ -160,13 +161,68 @@ describe('网页抓取网络边界', () => {
     )
   })
 
+  it('Markdown 替代页遇到错误、伪装 HTML、超限、跨站跳转或超时时沿用 HTML', async () => {
+    const page = 'https://example.com/guide'
+    for (const response of [
+      new Response('unavailable', { status: 404 }),
+      new Response('<!--cached error--><!doctype html><title>Login</title>', { headers: { 'content-type': 'text/markdown' } }),
+      new Response('  ', { headers: { 'content-type': 'text/markdown' } }),
+      new Response('%PDF-1.4', { headers: { 'content-type': 'text/plain' } }),
+      new Response('%PDF-1.4', { headers: { 'content-type': 'application/pdf' } }),
+      new Response('large', { headers: { 'content-type': 'text/plain', 'content-length': String(WEB_DOCUMENT_MAX_BYTES + 1) } }),
+      Response.redirect('https://other.example.com/guide.md'),
+      Response.redirect('http://127.0.0.1/guide.md'),
+      Response.redirect(page),
+    ]) {
+      let calls = 0
+      const fallback = await fetchLinkedMarkdown(page + '.md', page, {
+        resolveHost: publicResolver, fetchImpl: async () => { calls++; return response },
+      }, activeSignal)
+      assert.equal(fallback, null)
+      assert.equal(calls, 1)
+    }
+    const slow = { timeoutMs: 5, resolveHost: async () => new Promise<never>(() => {}), fetchImpl: async () => assert.fail() }
+    assert.equal(await fetchLinkedMarkdown(page + '.md', page, slow, activeSignal), null)
+  })
+
+  it('在可选 Markdown 请求期间停止会传递取消', async () => {
+    const controller = new AbortController()
+    const page = 'https://example.com/guide'
+    await assert.rejects(fetchLinkedMarkdown(page + '.md', page, {
+      resolveHost: publicResolver,
+      fetchImpl: async (_url, init) => {
+        controller.abort()
+        init.signal?.throwIfAborted()
+        return assert.fail()
+      },
+    }, controller.signal), /已取消/)
+  })
+
+  it('Markdown 中的 HTML 片段可原样读取，误标的整份 HTML 仍交给正文提取', async () => {
+    const page = 'https://example.com/guide'
+    const mixed = '<div align="center">Guide</div>\n\n# Configuration\n\n`request_timeout`'
+    let body = mixed
+    const network = {
+      resolveHost: publicResolver,
+      fetchImpl: async () => new Response(body, { headers: { 'content-type': 'text/markdown' } }),
+    }
+    const fetchDocument = createWebDocumentFetcher(network)
+    const direct = await fetchDocument(page, activeSignal)
+    assert.ok(direct.kind === 'text' && direct.contentType === 'text/markdown')
+    assert.equal(direct.text, mixed)
+    assert.equal((await fetchLinkedMarkdown(page + '.md', page, network, activeSignal))?.text, mixed)
+    body = '<!-- gateway --><html><body>HTML response</body></html>'
+    assert.equal((await fetchDocument(page, activeSignal)).contentType, 'text/html')
+  })
+
   it('识别并按 PDF 的既有 50 MB 边界返回原始字节', async () => {
     const pdfBytes = new TextEncoder().encode('%PDF-1.7\nremote document')
     const fetchDocument = createWebDocumentFetcher({
       resolveHost: publicResolver,
-      fetchImpl: async () => new Response(pdfBytes, {
-        headers: { 'content-type': 'application/pdf' },
-      }),
+      fetchImpl: async (_url, init) => {
+        assert.match(new Headers(init.headers).get('accept') ?? '', /^application\/pdf/)
+        return new Response(pdfBytes, { headers: { 'content-type': 'application/pdf' } })
+      },
     })
 
     const document = await fetchDocument('https://example.com/report.pdf', activeSignal)

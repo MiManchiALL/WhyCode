@@ -154,7 +154,7 @@ System 只包含会话内稳定内容：
 
 消息顺序为：按 Main 相同规则投影的稳定消息快照、BBTW 侧历史（BTW 为空）、当前侧输入及其 `<whycode-btw version="1">` 内部 user 提醒。提醒是宿主状态，不是新的用户要求；工具续轮沿用原提醒，BBTW 重建每轮输入时保留提醒原位，再追加新输入与提醒。Skill 目录继续参与前缀投影，活动正文仍遵循根任务生命周期。停止轮次在原输入及提醒、已提交工具步骤和可用回复片段后追加与 Main 相同的中断标记。
 
-允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind、Present，名单与提示词共用 `packages/core/src/prompts/btw.ts`。侧对话的 ReadFile 只读取文本，媒体附件不经侧对话工具步骤导入。其它工具在审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型。允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
+允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、Present，名单与提示词共用 `packages/core/src/prompts/btw.ts`。侧对话的 ReadFile 只读取文本，媒体附件不经侧对话工具步骤导入。其它工具在审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型。允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
 
 BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnIndex` 和 `mode`，以新的 canonical 输入身份替换旧输入并移除其后旧回复；编辑重发不增加侧链轮次。输出使用普通推理、正文和工具事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。响应中的 `toolSteps` 只保存中间工具步骤的 canonical messages、推理耗时、失败调用 ID 与可选 PDF 元数据；Provider metadata 随消息保留，不另存一份展示事件。PDF 元数据必须属于该会话，Fork 时重定位，最终正文不重复写入工具步骤。
 
@@ -298,9 +298,9 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 - 搜索后端、score 和厂商字段不进入模型 schema；结果按规范 URL 去重并提供可复用的引用链接。
 - DeepSeek 保留服务排序，优先使用 `summary`，为空时使用 `snippet`；不请求搜索全文，单条摘要沿用 1,200 字符上限。批量查询分别请求并保留成功结果，失败项明确返回原因。域名与日期转换为 `site:`、`after:`；组合后的查询最多 128 个 Unicode 字符，超限要求缩短或减少筛选，不截断查询。日期筛选按 UTC 日历日表达，month/year 分别取 30/365 天；不支持小时精度时明确要求改用 day 或核对来源时间。
 
-`WebFetch {url,offset?,limit?}` 只读取无需登录的公开 HTTP(S) 页面。已知 URL 直接读取，不先搜索；正文转为带稳定行号的 Markdown，单次最多 100 行/9k 字符，并返回总行数与下一 offset。内置下载命中 PDF 时导入为当前会话 PDF 附件，再用 `ReadFile`；DeepSeek 与 PDF 的分派边界见文档二 §11.2。
+`WebFetch {url,offset?,limit?,pattern?,max_results?}` 读取公开 HTTP(S) 页面。已知 URL 时只需传 `url`。文本按稳定行号分页，起始行默认为 1，单次默认及最多 100 行，正文上限 9,000 字符。结果给出来源、总行数和可继续读取的 offset。远程 PDF 导入为会话附件，用 `ReadFile` 按页读取。后端分派见文档二 §11.2。
 
-`WebFind {url,pattern,context=2,max_results=10}` 只在本会话已缓存的同一 WebFetch 正文中做字面查找，不联网、不重新抓取、不查 PDF。
+传 `pattern` 时只查本会话缓存，无需联网审批。可传一个关键词或 1～8 个关键词，每个最多 200 字符，按字面匹配任一词，忽略大小写和连续空白差异。`max_results` 仅用于查找，所有词共享默认 10、最多 20 行及 9,000 字符正文预算。优先覆盖不同关键词，命中行去重并按原行号返回。查找与分页分开调用，需要上下文时按行号读取。缓存缺失或过期时先用同一 `url` 和 `limit=1` 读取。
 
 普通公开读取失败，或用户明确需要授权/登录/私有数据时，再用 `ToolSearch` 查对应 MCP 能力。网页工具返回带显式引用标记的来源链接及可用的证据范围，不在工具说明或结果中重复附加最终回答规则。正文链接与来源引用的 System 规则见 §3.9。
 

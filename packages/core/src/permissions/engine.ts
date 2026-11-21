@@ -13,13 +13,15 @@ import {
  */
 export function checkInitialToolApproval(
   def: ToolDefinition,
+  input: unknown,
   ctx: PermissionContext,
 ): Extract<PermissionDecision, { behavior: 'ask' }> | null {
-  if (!def.initialApprovalReason || ctx.mode === 'auto') return null
-  if (ctx.sessionAllowedTools.includes(def.name)) return null
+  if (ctx.mode === 'auto' || ctx.sessionAllowedTools.includes(def.name)) return null
+  const reason = def.initialApprovalReason ?? def.behavior?.(input).initialApprovalReason
+  if (!reason) return null
   return {
     behavior: 'ask',
-    reason: def.initialApprovalReason,
+    reason,
     suggestion: { kind: 'allow-tool', toolName: def.name },
   }
 }
@@ -39,7 +41,7 @@ export async function checkToolAuthorization(
   const permission = await checkToolPermission(def, input, ctx)
   if (permission.behavior === 'deny') return permission
 
-  const initial = checkInitialToolApproval(def, ctx)
+  const initial = checkInitialToolApproval(def, input, ctx)
   if (!initial) return permission
   if (permission.behavior === 'allow') return initial
 

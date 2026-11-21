@@ -310,7 +310,7 @@ describe('工具首次隐私审批', () => {
 
     for (const mode of ['readonly', 'default', 'acceptEdits'] as const) {
       context.mode = mode
-      assert.deepEqual(checkInitialToolApproval(privacyReadTool, context), {
+      assert.deepEqual(checkInitialToolApproval(privacyReadTool, {}, context), {
         behavior: 'ask',
         reason: '会读取屏幕上的敏感内容',
         suggestion: { kind: 'allow-tool', toolName: 'PrivacyReadProbe' },
@@ -318,7 +318,7 @@ describe('工具首次隐私审批', () => {
     }
 
     context.mode = 'auto'
-    assert.equal(checkInitialToolApproval(privacyReadTool, context), null)
+    assert.equal(checkInitialToolApproval(privacyReadTool, {}, context), null)
     assert.equal((await checkToolPermission(editTool, { path: '.env' }, context)).behavior, 'allow')
     assert.equal(
       (await checkToolPermission(editTool, { path: 'D:\\outside\\result.txt' }, context)).behavior,
@@ -330,14 +330,14 @@ describe('工具首次隐私审批', () => {
     const context = createTestContext('C:\\workspace')
     context.sessionAllowedTools.push(privacyReadTool.name)
 
-    assert.equal(checkInitialToolApproval(privacyReadTool, context), null)
+    assert.equal(checkInitialToolApproval(privacyReadTool, {}, context), null)
   })
 
   it('全自动档也跳过项目进程等显式信任提示', () => {
     const context = createTestContext('C:\\workspace')
     context.mode = 'auto'
 
-    assert.equal(checkInitialToolApproval(projectProcessTool, context), null)
+    assert.equal(checkInitialToolApproval(projectProcessTool, {}, context), null)
   })
 })
 

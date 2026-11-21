@@ -1,33 +1,28 @@
 import {
   WEB_FETCH_MAX_LINES,
   WEB_FETCH_MAX_OUTPUT_CHARS,
-  WEB_FIND_MAX_OUTPUT_CHARS,
+  normalizeWebFindText,
   WebPageError,
-  type WebFetchHandler,
   type WebFetchPdfResponse,
   type WebFetchResponse,
-  type WebFindHandler,
-  type WebFindMatch,
+  type WebFindRequest,
+  type WebPageReader,
   type PdfAttachment,
 } from '@whycode/core'
-import type { ExtractedWebPage } from './content.ts'
+import { createExtractedWebPage, type ExtractedWebPage, type WebPageExtraction } from './content.ts'
 import { parseWebPageUrl } from './url-safety.ts'
 import type { WebDocument, WebPdfDocument, WebTextDocument } from './network.ts'
 
 export const WEB_PAGE_CACHE_MAX_ENTRIES = 6
 export const WEB_PAGE_CACHE_TTL_MS = 15 * 60_000
 
-export interface WebPageReader {
-  fetchPage: WebFetchHandler
-  findInPage: WebFindHandler
-}
-
 export interface WebPageReaderOptions {
   fetchDocument: (url: string, abortSignal: AbortSignal) => Promise<WebDocument>
+  fetchLinkedMarkdown: (url: string, pageUrl: string, abortSignal: AbortSignal) => Promise<WebTextDocument | null>
   extractDocument: (
     document: WebTextDocument,
     abortSignal: AbortSignal,
-  ) => Promise<ExtractedWebPage>
+  ) => Promise<WebPageExtraction>
   importPdfDocument: (
     document: WebPdfDocument,
     abortSignal: AbortSignal,
@@ -38,6 +33,7 @@ export interface WebPageReaderOptions {
 }
 
 interface CacheEntry {
+  documentUrl: string
   page: ExtractedWebPage
   expiresAt: number
 }
@@ -53,7 +49,7 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
   const cacheTtlMs = options.cacheTtlMs ?? WEB_PAGE_CACHE_TTL_MS
   const maxEntries = options.maxEntries ?? WEB_PAGE_CACHE_MAX_ENTRIES
 
-  const fetchPage: WebFetchHandler = async (request, abortSignal) => {
+  const fetchPage: WebPageReader['fetchPage'] = async (request, abortSignal) => {
     const requestedUrl = parseWebPageUrl(request.url).toString()
     let page = getCachedPage(cache, requestedUrl, now())
     if (!page) {
@@ -63,46 +59,24 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
     }
     return pageSlice(
       page,
+      requestedUrl,
       request.offset ?? 1,
       request.limit ?? WEB_FETCH_MAX_LINES,
     )
   }
 
-  const findInPage: WebFindHandler = async (request, abortSignal) => {
+  const findInPage: WebPageReader['findInPage'] = async (request, abortSignal) => {
     const requestedUrl = parseWebPageUrl(request.url).toString()
     const page = getCachedPage(cache, requestedUrl, now())
     if (!page) {
-      throw new WebPageError('当前会话没有这个文本网页的有效缓存；请先使用 WebFetch 读取同一 URL，若结果是 PDF 则改用 ReadFile')
+      throw new WebPageError('当前会话没有该网页的有效正文缓存。请先用同一 url 和 limit=1 读取；若为 PDF，请用 ReadFile。')
     }
-    const pattern = request.pattern.toLowerCase()
-    const matches: WebFindMatch[] = []
-    let outputChars = 0
-
-    for (let index = 0; index < page.lines.length; index++) {
-      if (index % 256 === 0 && abortSignal.aborted) {
-        throw new WebPageError('网页查找已取消')
-      }
-      const line = page.lines[index]!
-      if (!line.toLowerCase().includes(pattern)) continue
-      const context = contextWithinBudget(
-        page.lines,
-        index,
-        request.context,
-        WEB_FIND_MAX_OUTPUT_CHARS - outputChars,
-      )
-      if (context.length === 0) break
-      const contextChars = context.reduce((total, item) => total + item.text.length, 0)
-      matches.push({ lineNumber: index + 1, context })
-      outputChars += contextChars
-      if (matches.length >= request.maxResults || outputChars >= WEB_FIND_MAX_OUTPUT_CHARS) break
-    }
-
     return {
-      requestedUrl: page.requestedUrl,
+      requestedUrl,
       finalUrl: page.finalUrl,
-      ...(page.title ? { title: page.title } : {}),
+      title: page.title,
       totalLines: page.lines.length,
-      matches,
+      ...findMatchingLines(page.lines, request, abortSignal),
     }
   }
 
@@ -124,8 +98,14 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
           },
         }
       }
-      const page = await options.extractDocument(document, abortSignal)
-      putCachedPage(cache, url, page, now() + cacheTtlMs, maxEntries)
+      const extracted = await options.extractDocument(document, abortSignal)
+      let page: ExtractedWebPage = extracted
+      if (extracted.markdownUrl) {
+        const markdown = await options.fetchLinkedMarkdown(extracted.markdownUrl, document.finalUrl, abortSignal)
+        if (markdown) page = createExtractedWebPage(markdown, markdown.text, { title: extracted.title })
+      }
+      abortSignal.throwIfAborted()
+      putCachedPage(cache, url, { documentUrl: document.finalUrl, page, expiresAt: now() + cacheTtlMs }, maxEntries)
       return { kind: 'page' as const, page }
     })
     inFlight.set(url, pending)
@@ -141,6 +121,7 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
 
 function pageSlice(
   page: ExtractedWebPage,
+  requestedUrl: string,
   offset: number,
   limit: number,
 ): WebFetchResponse {
@@ -154,7 +135,7 @@ function pageSlice(
   }
   return {
     kind: 'page',
-    requestedUrl: page.requestedUrl,
+    requestedUrl,
     finalUrl: page.finalUrl,
     ...(page.title ? { title: page.title } : {}),
     contentType: page.contentType,
@@ -165,27 +146,49 @@ function pageSlice(
   }
 }
 
-function contextWithinBudget(
-  lines: readonly string[],
-  matchIndex: number,
-  contextLines: number,
-  budget: number,
-): { lineNumber: number; text: string }[] {
-  const match = lines[matchIndex]!
-  if (match.length > budget) return []
-  const selected = new Map<number, string>([[matchIndex, match]])
-  let used = match.length
-  for (let distance = 1; distance <= contextLines; distance++) {
-    for (const index of [matchIndex - distance, matchIndex + distance]) {
-      const line = lines[index]
-      if (line === undefined || used + line.length > budget) continue
-      selected.set(index, line)
-      used += line.length
+function findMatchingLines(lines: readonly string[], request: WebFindRequest, signal: AbortSignal) {
+  const { patterns, maxResults } = request
+  const selected = new Set<number>()
+  let chars = 0
+  function add(index: number): boolean {
+    if (selected.has(index)) return true
+    const length = lines[index]!.length
+    if (selected.size >= maxResults || chars + length > WEB_FETCH_MAX_OUTPUT_CHARS) return false
+    selected.add(index)
+    chars += length
+    return true
+  }
+
+  // 先给每个关键词留一个命中位置，避免高频词占满结果。
+  if (patterns.length > 1) {
+    const first = new Map<string, number>()
+    for (let index = 0; index < lines.length && first.size < patterns.length; index++) {
+      if (index % 256 === 0) signal.throwIfAborted()
+      const text = normalizeWebFindText(lines[index]!)
+      for (const word of patterns) {
+        if (!first.has(word) && text.includes(word)) first.set(word, index)
+      }
+    }
+    for (const word of patterns) {
+      const index = first.get(word)
+      if (index !== undefined) add(index)
+    }
+    if (!first.size) return { matches: [], hasMore: false }
+  }
+
+  let hasMore = false
+  for (let index = 0; index < lines.length; index++) {
+    if (index % 256 === 0) signal.throwIfAborted()
+    if (selected.has(index)) continue
+    const text = normalizeWebFindText(lines[index]!)
+    if (patterns.some((word) => text.includes(word)) && !add(index)) {
+      hasMore = true
+      if (selected.size === maxResults) break
     }
   }
-  return [...selected.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([index, text]) => ({ lineNumber: index + 1, text }))
+  const matches = [...selected].sort((a, b) => a - b)
+    .map((index) => ({ lineNumber: index + 1, text: lines[index]! }))
+  return { matches, hasMore }
 }
 
 function getCachedPage(
@@ -194,31 +197,25 @@ function getCachedPage(
   currentTime: number,
 ): ExtractedWebPage | null {
   const exact = cache.get(url)
-  const found = exact
-    ? { key: url, entry: exact }
-    : [...cache.entries()]
-        .map(([key, entry]) => ({ key, entry }))
-        .find(({ entry }) => entry.page.finalUrl === url)
+  const found = exact ? [url, exact] as const : [...cache].find(([, { documentUrl, page }]) =>
+    documentUrl === url || page.requestedUrl === url || page.finalUrl === url)
   if (!found) return null
-  if (found.entry.expiresAt <= currentTime) {
-    cache.delete(found.key)
-    return null
-  }
+  const [key, entry] = found
+  cache.delete(key)
+  if (entry.expiresAt <= currentTime) return null
   // Map 的插入顺序同时承担 LRU；命中后移到末尾。
-  cache.delete(found.key)
-  cache.set(found.key, found.entry)
-  return found.entry.page
+  cache.set(key, entry)
+  return entry.page
 }
 
 function putCachedPage(
   cache: Map<string, CacheEntry>,
   key: string,
-  page: ExtractedWebPage,
-  expiresAt: number,
+  entry: CacheEntry,
   maxEntries: number,
 ): void {
   cache.delete(key)
-  cache.set(key, { page, expiresAt })
+  cache.set(key, entry)
   while (cache.size > Math.max(1, maxEntries)) {
     const oldest = cache.keys().next().value as string | undefined
     if (!oldest) break

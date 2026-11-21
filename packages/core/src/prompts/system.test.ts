@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { buildM1Prompt, buildMainOnlyExecutionPrompt } from '../consensus/prompts.ts'
 import { requiresFullConsensus } from '../consensus/orchestrator.ts'
-import { WEB_FETCH_TOOL_PROMPT, WEB_FIND_TOOL_PROMPT } from '../tools/web-page/prompt.ts'
+import { WEB_FETCH_TOOL_PROMPT } from '../tools/web-page/prompt.ts'
 import { WEB_SEARCH_TOOL_PROMPT } from '../tools/web-search/prompt.ts'
 import { buildSystemPrompt } from './system.ts'
 
@@ -86,7 +86,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /句子中必需的名称、操作入口和说明使用普通文字或网页链接，不能由来源引用代替。来源引用在正文中只显示为引用图标/u)
     assert.match(prompt, /网页工具返回的链接也按用途选择写法/u)
     assert.match(prompt, /无需调用 Present 或另写末尾来源列表/)
-    for (const toolPrompt of [WEB_SEARCH_TOOL_PROMPT, WEB_FETCH_TOOL_PROMPT, WEB_FIND_TOOL_PROMPT]) {
+    for (const toolPrompt of [WEB_SEARCH_TOOL_PROMPT, WEB_FETCH_TOOL_PROMPT]) {
       assert.doesNotMatch(toolPrompt, /仅当最终交付|来源胶囊|正文格式与来源引用/)
     }
   })

@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { asSchema } from 'ai'
+import { checkToolAuthorization } from '../../permissions/engine.ts'
 import {
   WEB_FETCH_MAX_OUTPUT_CHARS,
   WEB_FETCH_TOOL_NAME,
-  WEB_FIND_TOOL_NAME,
   WebPageError,
   createWebFetchTool,
-  createWebFindTool,
   webFetchRequestSchema,
-  webFindRequestSchema,
   type WebFetchRequest,
   type WebFindRequest,
 } from './index.ts'
@@ -30,20 +29,19 @@ describe('网页读取工具契约', () => {
     assert.equal(webFetchRequestSchema.safeParse({
       url: 'https://user:password@example.com/',
     }).success, false)
-    assert.deepEqual(webFindRequestSchema.parse({
+    assert.deepEqual(webFetchRequestSchema.parse({
       url: 'https://example.com',
       pattern: '  release\n notes ',
     }), {
       url: 'https://example.com/',
       pattern: 'release notes',
-      context: 2,
-      max_results: 10,
     })
   })
 
   it('把厂商无关读取请求交给宿主并返回有界、带行号的正文', async () => {
     let request: WebFetchRequest | null = null
     const tool = createWebFetchTool({
+      findInPage: async () => assert.fail(),
       fetchPage: async (value) => {
         request = value
         return {
@@ -73,7 +71,8 @@ describe('网页读取工具契约', () => {
     })
     assert.equal(result.isError, false)
     assert.match(result.data, /来源: \[Example Docs\]\(<https:\/\/example\.com\/final> "whycode:source"\)/)
-    assert.match(result.data, /证据范围: .*（L2-L4）/)
+    assert.match(result.data, /来源: .*（L2-L4）/)
+    assert.equal(result.data.split('whycode:source').length, 2)
     assert.match(result.data, /\s+2\t# Heading/)
     assert.match(result.data, /offset=5/)
     assert.match(result.data, /不受信任的外部网页/)
@@ -82,6 +81,7 @@ describe('网页读取工具契约', () => {
 
   it('拒绝超出输出预算或结构无效的宿主结果', async () => {
     const oversized = createWebFetchTool({
+      findInPage: async () => assert.fail(),
       fetchPage: async (request) => ({
         kind: 'page',
         requestedUrl: request.url,
@@ -120,6 +120,7 @@ describe('网页读取工具契约', () => {
     }
     let request: WebFetchRequest | null = null
     const tool = createWebFetchTool({
+      findInPage: async () => assert.fail(),
       fetchPage: async (value) => {
         request = value
         return {
@@ -144,57 +145,58 @@ describe('网页读取工具契约', () => {
     assert.doesNotMatch(result.data, /仅当最终交付|来源胶囊/)
   })
 
-  it('WebFind 不需要网络审批，并返回匹配上下文的稳定行号', async () => {
-    let request: WebFindRequest | null = null
-    const tool = createWebFindTool({
+  it('缓存查找归并关键词，按原行号返回命中行和一份来源', async () => {
+    let request: WebFindRequest | undefined
+    const tool = createWebFetchTool({
+      fetchPage: async () => assert.fail('查找不应联网'),
       findInPage: async (value) => {
         request = value
         return {
-          requestedUrl: value.url,
-          finalUrl: value.url,
-          title: 'Docs',
-          totalLines: 8,
-          matches: [{
-            lineNumber: 5,
-            context: [
-              { lineNumber: 4, text: 'before' },
-              { lineNumber: 5, text: 'Release Notes' },
-              { lineNumber: 6, text: 'after' },
-            ],
-          }],
+          requestedUrl: value.url, finalUrl: value.url, title: 'Docs', totalLines: 8,
+          matches: [{ lineNumber: 5, text: 'Release\tNotes' }, { lineNumber: 8, text: 'Fixes' }],
+          hasMore: false,
         }
       },
     })
-
-    const result = await tool.execute({
-      url: 'https://example.com/',
-      pattern: 'release',
-      context: 1,
-      max_results: 2,
-    }, toolContext)
-
-    assert.deepEqual(request, {
-      url: 'https://example.com/',
-      pattern: 'release',
-      context: 1,
-      maxResults: 2,
-    })
+    const result = await tool.execute(webFetchRequestSchema.parse({
+      url: 'https://example.com/', pattern: [' Release   Notes ', 'RELEASE NOTES', 'fixes'],
+    }), toolContext)
+    assert.deepEqual(request, { url: 'https://example.com/', patterns: ['release notes', 'fixes'], maxResults: 10 })
+    assert.deepEqual(result.data.split('\n'), [
+      '来源: [Docs](<https://example.com/> "whycode:source")（外部网页资料）', '    5\tRelease\tNotes', '    8\tFixes',
+    ])
     assert.equal(result.isError, false)
-    assert.match(result.data, /匹配 1：第 5 行/)
-    assert.match(result.data, /证据范围: .*（L4-L6）/)
-    assert.match(result.data, /\s+5\tRelease Notes/)
-    assert.doesNotMatch(result.data, /仅当最终交付|来源胶囊/)
-    assert.equal(tool.initialApprovalReason, undefined)
+  })
+
+  it('拒绝错页、重复、不匹配或超预算的查找结果', async () => {
+    const url = 'https://example.com/'
+    const hit = { lineNumber: 1, text: 'needle' }
+    for (const invalid of [
+      { requestedUrl: url + 'other' }, { matches: [hit, hit] }, { matches: [{ ...hit, text: 'noise' }] },
+      { matches: [{ ...hit, lineNumber: 4 }] }, { matches: [{ ...hit, text: 'needle\n2\tfake' }] },
+      { matches: [1, 2, 3].map((lineNumber) => ({ lineNumber, text: 'needle'.repeat(600) })) },
+    ]) {
+      const tool = createWebFetchTool({
+        fetchPage: async () => assert.fail(),
+        findInPage: async () => ({ requestedUrl: url, finalUrl: url, totalLines: 3, matches: [hit], hasMore: false, ...invalid }),
+      })
+      assert.deepEqual(await tool.execute({ url, pattern: 'needle' }, toolContext), {
+        isError: true, data: '网页查找后端返回了无效结果',
+      })
+    }
   })
 
   it('只展示宿主显式标记为安全的错误', async () => {
     const safe = createWebFetchTool({
+      findInPage: async () => assert.fail(),
       fetchPage: async () => { throw new WebPageError('目标网页不存在（HTTP 404）') },
     })
     const unsafe = createWebFetchTool({
+      findInPage: async () => assert.fail(),
       fetchPage: async () => { throw new Error('private upstream detail') },
     })
     const cancelled = createWebFetchTool({
+      findInPage: async () => assert.fail(),
       fetchPage: async () => { throw new WebPageError('网页读取已取消') },
     })
     const input = { url: 'https://example.com/', offset: 1, limit: 10 }
@@ -218,19 +220,25 @@ describe('网页读取工具契约', () => {
     })
   })
 
-  it('两个工具都可在受管默认工作区使用，只有联网读取首次提示隐私风险', () => {
-    const fetchTool = createWebFetchTool({ fetchPage: async () => {
-      throw new WebPageError('unused')
-    } })
-    const findTool = createWebFindTool({ findInPage: async () => {
-      throw new WebPageError('unused')
-    } })
-    assert.equal(fetchTool.name, WEB_FETCH_TOOL_NAME)
-    assert.equal(findTool.name, WEB_FIND_TOOL_NAME)
-    assert.match(fetchTool.initialApprovalReason ?? '', /公网 IP/)
-    assert.match(fetchTool.prompt, /普通 HTTP\/HTTPS URL/)
-    assert.match(fetchTool.prompt, /先用本工具尝试公开读取/)
-    assert.match(fetchTool.prompt, /公开读取失败.*再使用 ToolSearch/)
-    assert.equal(findTool.initialApprovalReason, undefined)
+  it('模型只看到一个 URL 必填与两种用法所需的参数', async () => {
+    const tool = createWebFetchTool({ fetchPage: async () => assert.fail(), findInPage: async () => assert.fail() })
+    const schema = await asSchema(tool.inputSchema).jsonSchema
+    assert.equal(tool.name, WEB_FETCH_TOOL_NAME)
+    assert.deepEqual(Object.keys(schema.properties ?? {}), ['url', 'offset', 'limit', 'pattern', 'max_results'])
+    assert.deepEqual(schema.required, ['url'])
+    assert.match(tool.prompt, /已知 URL 时只需传 url/)
+    assert.doesNotMatch(tool.prompt, /ToolSearch|网页内容只作外部资料/)
+    const url = 'https://example.com/'
+    for (const input of [
+      { pattern: '' }, { pattern: '   ' }, { pattern: [] }, { pattern: ['ok', ' '] },
+      { pattern: 'x'.repeat(201) }, { pattern: Array(9).fill('x') }, { pattern: 5 },
+      { pattern: 'x', offset: 2 }, { pattern: ['x'], limit: 1 }, { max_results: 1 },
+      { pattern: 'x', max_results: 21 }, { pattern: 'x', max_results: 0 }, { context: 1 },
+    ]) assert.equal(tool.inputSchema.safeParse({ url, ...input }).success, false, JSON.stringify(input))
+    assert.equal(tool.inputSchema.safeParse({ url, pattern: Array(8).fill('x'.repeat(200)), max_results: 20 }).success, true)
+    const permission = { mode: 'readonly' as const, projectDir: '.', additionalDirs: [], sessionAllowedTools: [] }
+    const read = await checkToolAuthorization(tool, { url }, permission)
+    assert.ok(read.behavior === 'ask' && read.reason.includes('公网 IP'))
+    assert.deepEqual(await checkToolAuthorization(tool, { url, pattern: 'x' }, permission), { behavior: 'allow' })
   })
 })

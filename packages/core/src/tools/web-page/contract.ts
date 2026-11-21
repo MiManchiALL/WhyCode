@@ -5,10 +5,9 @@ export const WEB_PAGE_MAX_URL_CHARS = 2_048
 export const WEB_PAGE_MAX_LINE_CHARS = 4_096
 export const WEB_FETCH_MAX_LINES = 100
 export const WEB_FETCH_MAX_OUTPUT_CHARS = 9_000
-export const WEB_FIND_MAX_PATTERN_CHARS = 200
-export const WEB_FIND_MAX_CONTEXT_LINES = 2
-export const WEB_FIND_MAX_RESULTS = 10
-export const WEB_FIND_MAX_OUTPUT_CHARS = 9_000
+export const WEB_FETCH_DEFAULT_RESULTS = 10
+const MAX_RESULTS = 20
+const MAX_PATTERNS = 8
 
 const webPageUrlSchema = z.string()
   .trim()
@@ -19,51 +18,41 @@ const webPageUrlSchema = z.string()
   })
   .overwrite((value) => normalizeWebPageUrl(value) ?? value)
 
-export const webFetchRequestSchema = z.object({
+const keyword = z.string().trim().min(1).max(200)
+  .overwrite((value) => value.replace(/\s+/gu, ' '))
+
+export const webFetchRequestSchema = z.strictObject({
   url: webPageUrlSchema.describe('要读取的公开网页或远程 PDF URL'),
   offset: z.number()
     .int()
     .min(1)
     .optional()
-    .describe('仅文本网页有效：起始行号，从 1 开始；继续读取时使用上次结果给出的 next offset'),
+    .describe('读取正文的起始行号，从 1 开始'),
   limit: z.number()
     .int()
     .min(1)
     .max(WEB_FETCH_MAX_LINES)
     .optional()
-    .describe(`仅文本网页有效：最多返回多少行，默认及最大均为 ${WEB_FETCH_MAX_LINES}`),
-})
-
-export const webFindRequestSchema = z.object({
-  url: webPageUrlSchema.describe('此前已经用 WebFetch 读取过的同一网页 URL'),
-  pattern: z.string()
-    .trim()
-    .min(1)
-    .max(WEB_FIND_MAX_PATTERN_CHARS)
-    .overwrite((value) => value.replace(/\s+/gu, ' ').trim())
-    .describe('要查找的普通文本，不是正则表达式'),
-  context: z.number()
-    .int()
-    .min(0)
-    .max(WEB_FIND_MAX_CONTEXT_LINES)
-    .default(WEB_FIND_MAX_CONTEXT_LINES)
-    .describe('每个匹配前后附带的上下文行数'),
+    .describe(`读取正文的最多行数，默认及最大均为 ${WEB_FETCH_MAX_LINES}`),
+  pattern: z.union([keyword, z.array(keyword).min(1).max(MAX_PATTERNS)]).optional()
+    .describe('在缓存正文中做不区分大小写的字面查找，匹配任一关键词。与 offset、limit 分开使用'),
   max_results: z.number()
     .int()
     .min(1)
-    .max(WEB_FIND_MAX_RESULTS)
-    .default(WEB_FIND_MAX_RESULTS)
-    .describe(`最多返回多少个匹配，最大 ${WEB_FIND_MAX_RESULTS}`),
+    .max(MAX_RESULTS)
+    .optional()
+    .describe(`仅查找时使用，所有关键词合计返回的匹配行数，默认 ${WEB_FETCH_DEFAULT_RESULTS}，最大 ${MAX_RESULTS}`),
+}).superRefine((input, ctx) => {
+  if (input.pattern === undefined && input.max_results !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['max_results'], message: 'max_results 需要与 pattern 一起使用' })
+  }
+  if (input.pattern !== undefined && (input.offset !== undefined || input.limit !== undefined)) {
+    ctx.addIssue({ code: 'custom', path: ['pattern'], message: '查找和分页请分开调用' })
+  }
 })
 
 export type WebFetchToolInput = z.infer<typeof webFetchRequestSchema>
-export type WebFindToolInput = z.infer<typeof webFindRequestSchema>
-
-export interface WebFetchRequest {
-  url: string
-  offset?: number
-  limit?: number
-}
+export type WebFetchRequest = Pick<WebFetchToolInput, 'url' | 'offset' | 'limit'>
 
 export interface WebPageLine {
   lineNumber: number
@@ -95,14 +84,8 @@ export type WebFetchResponse = WebFetchPageResponse | WebFetchPdfResponse
 
 export interface WebFindRequest {
   url: string
-  pattern: string
-  context: number
+  patterns: readonly string[]
   maxResults: number
-}
-
-export interface WebFindMatch {
-  lineNumber: number
-  context: readonly WebPageLine[]
 }
 
 export interface WebFindResponse {
@@ -110,18 +93,18 @@ export interface WebFindResponse {
   finalUrl: string
   title?: string
   totalLines: number
-  matches: readonly WebFindMatch[]
+  matches: readonly WebPageLine[]
+  hasMore: boolean
 }
 
-export type WebFetchHandler = (
-  request: WebFetchRequest,
-  abortSignal: AbortSignal,
-) => Promise<WebFetchResponse>
+export interface WebPageReader {
+  fetchPage(request: WebFetchRequest, abortSignal: AbortSignal): Promise<WebFetchResponse>
+  findInPage(request: WebFindRequest, abortSignal: AbortSignal): Promise<WebFindResponse>
+}
 
-export type WebFindHandler = (
-  request: WebFindRequest,
-  abortSignal: AbortSignal,
-) => Promise<WebFindResponse>
+export function normalizeWebFindText(value: string): string {
+  return value.toLowerCase().replace(/\s+/gu, ' ')
+}
 
 /** 宿主只用此错误传递已脱敏、可直接展示的网页读取故障。 */
 export class WebPageError extends Error {

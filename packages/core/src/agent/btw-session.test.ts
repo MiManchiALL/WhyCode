@@ -16,7 +16,7 @@ import { SkillCatalogService } from '../skills/catalog.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildTool } from '../tools/tool.ts'
 import { createWebSearchTool } from '../tools/web-search/index.ts'
-import { createWebFetchTool, createWebFindTool, WebPageError } from '../tools/web-page/index.ts'
+import { createWebFetchTool, WebPageError } from '../tools/web-page/index.ts'
 import { AgentSession } from './session.ts'
 
 describe('BTW 独立侧对话', () => {
@@ -38,8 +38,7 @@ describe('BTW 独立侧对话', () => {
       skillCatalog: new SkillCatalogService({ homeDir: home }),
       mainTools: [
         createWebSearchTool({ search: async () => ({ results: [] }) }),
-        createWebFetchTool({ fetchPage: async () => { throw new Error('未使用') } }),
-        createWebFindTool({ findInPage: async () => { throw new Error('未使用') } }),
+        createWebFetchTool({ fetchPage: async () => assert.fail(), findInPage: async () => assert.fail() }),
       ],
     })
     assert.equal(await session.handleUserMessage('主问题'), 'completed')
@@ -215,7 +214,10 @@ describe('BTW 独立侧对话', () => {
       const session = createSession(model, {
         mainTools: [
           createWebSearchTool({ search: async () => { searches++; return { results: [] } } }),
-          createWebFetchTool({ fetchPage: async () => { throw new WebPageError('网页需要登录') } }),
+          createWebFetchTool({
+            findInPage: async () => assert.fail(),
+            fetchPage: async () => { throw new WebPageError('网页需要登录') },
+          }),
         ],
         requestApproval: async () => { approvals++; return { approved: true, remember: true } },
       })
@@ -271,13 +273,16 @@ describe('BTW 独立侧对话', () => {
         doStream: [toolStep('WebFetch', { url: 'https://example.com/slow' })],
       })
       const session = createSession(model, {
-        mainTools: [createWebFetchTool({ fetchPage: async (_request, abortSignal) => {
-          signal = abortSignal
-          onStarted()
-          return new Promise((_resolve, reject) => {
-            abortSignal.addEventListener('abort', () => reject(new Error('已取消')), { once: true })
-          })
-        } })],
+        mainTools: [createWebFetchTool({
+          findInPage: async () => assert.fail(),
+          fetchPage: async (_request, abortSignal) => {
+            signal = abortSignal
+            onStarted()
+            return new Promise((_resolve, reject) => {
+              abortSignal.addEventListener('abort', () => reject(new Error('已取消')), { once: true })
+            })
+          },
+        })],
       })
       session.setPermissionMode('auto')
       const results: BtwTurnResult[] = []

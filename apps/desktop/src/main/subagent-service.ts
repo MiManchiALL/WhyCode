@@ -85,7 +85,7 @@ export interface SubagentServiceOptions {
   definitions: SubagentDefinitionCatalogService
   skills: SkillCatalogService
   webSearchTool: ToolDefinition
-  createWebPageTools: (journal: SessionJournal) => ToolDefinition[]
+  createWebFetch: (journal: SessionJournal) => ToolDefinition
   selectModel: (parent: SubagentModelSnapshot) => SubagentModelSnapshot | null
   resolveModel: (modelId: string) => ResolvedSubagentModel | null
   pdfProcessor: PdfProcessor
@@ -549,7 +549,7 @@ export class SubagentService {
         scratch: this.options.scratch,
         skills: this.options.skills,
         webSearchTool: this.options.webSearchTool,
-        createWebPageTools: this.options.createWebPageTools,
+        createWebFetch: this.options.createWebFetch,
         resolveModel: this.options.resolveModel,
         pdfProcessor: this.options.pdfProcessor,
         prepareSkillRuntime: this.options.prepareSkillRuntime,
