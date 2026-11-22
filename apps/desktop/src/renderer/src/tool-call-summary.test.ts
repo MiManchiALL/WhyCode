@@ -37,6 +37,7 @@ describe('工具卡片关键参数摘要', () => {
     ['WebSearch', { query: ['WhyCode', 'agent UI'], domains: ['github.com'], recency: 'week' }, 'WhyCode agent UI · past week'],
     ['WebFetch', { url: 'https://example.com/', offset: 101, limit: 100 }, 'https://example.com/ · lines 101–200'],
     ['WebFetch', { url: 'https://example.com/', pattern: ['AgentSession', 'ToolContext'] }, '“AgentSession、ToolContext” · https://example.com/'],
+    ['WebFetch', { url: 'https://example.com/', pattern: 'item', offset: 21 }, '“item” · https://example.com/ · from match 21'],
     ['ReadFile', { path: 'screen.png' }, 'screen.png · high'],
     ['ReadFile', { path: 'diagram.svg', offset: 1, limit: 40 }, 'diagram.svg · lines 1–40'],
     ['AnalyzeImage', { question: '按钮是否对齐？', attachmentIds: ['a', 'b'] }, '按钮是否对齐？ · 2 images'],

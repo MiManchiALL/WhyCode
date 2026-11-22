@@ -89,7 +89,7 @@ function knownToolSummary(
     case 'WebFetch':
       return input.pattern === undefined
         ? parts(text(input, 'url'), fixed(lineRange(input, 'offset', 'limit')))
-        : parts(quote(querySummary(input.pattern, '、')), text(input, 'url'))
+        : parts(quote(querySummary(input.pattern, '、')), text(input, 'url'), fixed(numberLabel(input, 'offset', 'from match')))
     case 'AnalyzeImage':
       return parts(inlineText(input.question), fixed(arrayCount(input, 'attachmentIds', 'image', 'images')))
     case 'CaptureScreenshot':

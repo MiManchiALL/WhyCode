@@ -43,11 +43,18 @@ export function pageMarkdownUrl(href: unknown, pageUrl: string, baseUrl = pageUr
   if (!url || url.origin !== page.origin || url.username || url.password) return
   url.hash = ''
   if (url.href === page.href || url.href.length > WEB_PAGE_MAX_URL_CHARS) return
-  for (const [key, value] of page.searchParams) {
-    if (key !== 'format' && !url.searchParams.getAll(key).includes(value)) return
-  }
+  if (pageQuery(url) !== pageQuery(page)) return
   const pagePath = (pathname: string) => pathname.replace(/(?:\/index)?\.(?:html?|md|markdown)$|\/$/iu, '')
   if (pagePath(url.pathname) === pagePath(page.pathname)) return url.href
+}
+
+function pageQuery(url: URL): string {
+  const params = new URLSearchParams(url.search)
+  const formats = params.getAll('format')
+  if (formats.length === 1 && /^(?:html?|md|markdown)$/iu.test(formats[0]!)) params.delete('format')
+  // sort 按键稳定排序，同名参数的数量和值顺序仍参与页面身份判断。
+  params.sort()
+  return params.toString()
 }
 
 export async function assertPublicWebTarget(

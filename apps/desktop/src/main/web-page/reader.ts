@@ -6,6 +6,7 @@ import {
   type WebFetchPdfResponse,
   type WebFetchResponse,
   type WebFindRequest,
+  type WebPageLine,
   type WebPageReader,
   type PdfAttachment,
 } from '@whycode/core'
@@ -147,19 +148,28 @@ function pageSlice(
 }
 
 function findMatchingLines(lines: readonly string[], request: WebFindRequest, signal: AbortSignal) {
-  const { patterns, maxResults } = request
-  const selected = new Set<number>()
+  const matches: WebPageLine[] = []
   let chars = 0
-  function add(index: number): boolean {
-    if (selected.has(index)) return true
-    const length = lines[index]!.length
-    if (selected.size >= maxResults || chars + length > WEB_FETCH_MAX_OUTPUT_CHARS) return false
-    selected.add(index)
-    chars += length
-    return true
+  let position = 0
+  let hasMore = false
+  for (const index of matchingLineIndices(lines, request.patterns, signal)) {
+    position++
+    if (position < request.offset) continue
+    const text = lines[index]!
+    if (matches.length === request.maxResults || chars + text.length > WEB_FETCH_MAX_OUTPUT_CHARS) {
+      hasMore = true
+      break
+    }
+    matches.push({ lineNumber: index + 1, text })
+    chars += text.length
   }
+  matches.sort((a, b) => a.lineNumber - b.lineNumber)
+  return { matches, hasMore }
+}
 
-  // 先给每个关键词留一个命中位置，避免高频词占满结果。
+// 先枚举各关键词的首次命中，再按原文补齐。翻页只依赖这个顺序，与每次能显示几行无关。
+function* matchingLineIndices(lines: readonly string[], patterns: readonly string[], signal: AbortSignal) {
+  const priority = new Set<number>()
   if (patterns.length > 1) {
     const first = new Map<string, number>()
     for (let index = 0; index < lines.length && first.size < patterns.length; index++) {
@@ -169,26 +179,20 @@ function findMatchingLines(lines: readonly string[], request: WebFindRequest, si
         if (!first.has(word) && text.includes(word)) first.set(word, index)
       }
     }
+    if (first.size === 0) return
     for (const word of patterns) {
       const index = first.get(word)
-      if (index !== undefined) add(index)
+      if (index !== undefined) priority.add(index)
     }
-    if (!first.size) return { matches: [], hasMore: false }
+    yield* priority
   }
 
-  let hasMore = false
   for (let index = 0; index < lines.length; index++) {
     if (index % 256 === 0) signal.throwIfAborted()
-    if (selected.has(index)) continue
+    if (priority.has(index)) continue
     const text = normalizeWebFindText(lines[index]!)
-    if (patterns.some((word) => text.includes(word)) && !add(index)) {
-      hasMore = true
-      if (selected.size === maxResults) break
-    }
+    if (patterns.some((word) => text.includes(word))) yield index
   }
-  const matches = [...selected].sort((a, b) => a - b)
-    .map((index) => ({ lineNumber: index + 1, text: lines[index]! }))
-  return { matches, hasMore }
 }
 
 function getCachedPage(

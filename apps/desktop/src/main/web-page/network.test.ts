@@ -198,6 +198,28 @@ describe('网页抓取网络边界', () => {
     }, controller.signal), /已取消/)
   })
 
+  it('替代页的每一跳都在请求前核对原文路径和查询参数', async () => {
+    const page = 'https://example.com/article?id=1'
+    const linked = 'https://example.com/article.md?id=1'
+    const canonical = 'https://example.com/article/index.md?id=1'
+    for (const other of ['https://example.com/other.md?id=1', linked + '&id=2']) {
+      const calls: string[] = []
+      const network = {
+        resolveHost: publicResolver,
+        fetchImpl: async (url: string) => {
+          calls.push(url)
+          if (url === linked) return Response.redirect(canonical)
+          if (url === canonical) return Response.redirect(other)
+          return new Response('# Different article', { headers: { 'content-type': 'text/markdown' } })
+        },
+      }
+      assert.equal(await fetchLinkedMarkdown(linked, page, network, activeSignal), null)
+      assert.deepEqual(calls, [linked, canonical])
+      assert.equal(await fetchLinkedMarkdown(other, page, network, activeSignal), null)
+      assert.deepEqual(calls, [linked, canonical])
+    }
+  })
+
   it('Markdown 中的 HTML 片段可原样读取，误标的整份 HTML 仍交给正文提取', async () => {
     const page = 'https://example.com/guide'
     const mixed = '<div align="center">Guide</div>\n\n# Configuration\n\n`request_timeout`'
