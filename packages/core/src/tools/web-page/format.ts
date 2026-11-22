@@ -1,5 +1,5 @@
 import {
-  WEB_FETCH_MAX_LINES,
+  WEB_FETCH_DEFAULT_LINES,
   WEB_FETCH_MAX_OUTPUT_CHARS,
   WEB_PAGE_MAX_LINE_CHARS,
   WebPageError,
@@ -120,7 +120,7 @@ function normalizeFetchResponse(
   const offset = normalizedInteger(value.offset, 1)
   const totalLines = normalizedInteger(value.totalLines, 0)
   const requestedOffset = request.offset ?? 1
-  const requestedLimit = request.limit ?? WEB_FETCH_MAX_LINES
+  const requestedLimit = request.limit ?? WEB_FETCH_DEFAULT_LINES
   if (
     !requestedUrl
     || !finalUrl

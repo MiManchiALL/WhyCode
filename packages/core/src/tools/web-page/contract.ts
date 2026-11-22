@@ -3,10 +3,11 @@ import type { PdfAttachment } from '../../pdf/types.ts'
 
 export const WEB_PAGE_MAX_URL_CHARS = 2_048
 export const WEB_PAGE_MAX_LINE_CHARS = 4_096
-export const WEB_FETCH_MAX_LINES = 100
-export const WEB_FETCH_MAX_OUTPUT_CHARS = 9_000
-export const WEB_FETCH_DEFAULT_RESULTS = 10
-const MAX_RESULTS = 20
+export const WEB_FETCH_DEFAULT_LINES = 100
+export const WEB_FETCH_MAX_LINES = 300
+export const WEB_FETCH_MAX_OUTPUT_CHARS = 24_000
+export const WEB_FETCH_DEFAULT_RESULTS = 20
+const MAX_RESULTS = 50
 const MAX_PATTERNS = 8
 
 const webPageUrlSchema = z.string()
@@ -33,7 +34,7 @@ export const webFetchRequestSchema = z.strictObject({
     .min(1)
     .max(WEB_FETCH_MAX_LINES)
     .optional()
-    .describe(`仅用于读取正文，默认及最多 ${WEB_FETCH_MAX_LINES} 行`),
+    .describe(`仅用于读取正文，默认 ${WEB_FETCH_DEFAULT_LINES} 行，最多 ${WEB_FETCH_MAX_LINES} 行`),
   pattern: z.union([keyword, z.array(keyword).min(1).max(MAX_PATTERNS)]).optional()
     .describe('在缓存正文中做不区分大小写的字面查找，匹配任一关键词'),
   max_results: z.number()

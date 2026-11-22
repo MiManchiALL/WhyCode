@@ -193,6 +193,7 @@ export {
   type WebSearchToolInput,
 } from './tools/web-search/index.ts'
 export {
+  WEB_FETCH_DEFAULT_LINES,
   WEB_FETCH_MAX_LINES,
   WEB_FETCH_MAX_OUTPUT_CHARS,
   WEB_FETCH_TOOL_NAME,

@@ -3,7 +3,6 @@ import { describe, it } from 'node:test'
 import { asSchema } from 'ai'
 import { checkToolAuthorization } from '../../permissions/engine.ts'
 import {
-  WEB_FETCH_MAX_OUTPUT_CHARS,
   WEB_FETCH_TOOL_NAME,
   WebPageError,
   createWebFetchTool,
@@ -79,8 +78,10 @@ describe('网页读取工具契约', () => {
     assert.doesNotMatch(result.data, /仅当最终交付|来源胶囊/)
   })
 
-  it('拒绝超出输出预算或结构无效的宿主结果', async () => {
-    const oversized = createWebFetchTool({
+  it('读取结果按请求行数和 24,000 个正文字符校验', async () => {
+    const url = 'https://example.com/'
+    let lines = Array<string>(6).fill('文'.repeat(4_000))
+    const tool = createWebFetchTool({
       findInPage: async () => assert.fail(),
       fetchPage: async (request) => ({
         kind: 'page',
@@ -88,22 +89,20 @@ describe('网页读取工具契约', () => {
         finalUrl: request.url,
         contentType: 'text/plain',
         offset: request.offset ?? 1,
-        totalLines: 3,
-        lines: ['A'.repeat(4_000), 'B'.repeat(4_000), 'C'.repeat(1_100)],
+        totalLines: lines.length,
+        lines,
         sourceTruncated: false,
       }),
     })
-    const result = await oversized.execute({
-      url: 'https://example.com/',
-      offset: 1,
-      limit: 3,
-    }, toolContext)
-
-    assert.deepEqual(result, {
+    assert.equal((await tool.execute({ url }, toolContext)).isError, false)
+    lines.push('尾')
+    assert.deepEqual(await tool.execute({ url }, toolContext), {
       data: '网页读取后端返回了无效结果\n若已配置对应的 MCP 服务，可尝试 ToolSearch。',
       isError: true,
     })
-    assert.equal(WEB_FETCH_MAX_OUTPUT_CHARS, 9_000)
+    lines = Array<string>(101).fill('短行')
+    assert.equal((await tool.execute({ url }, toolContext)).isError, true)
+    assert.equal((await tool.execute({ url, limit: 300 }, toolContext)).isError, false)
   })
 
   it('远程 PDF 只返回会话附件引用，不伪造行分页', async () => {
@@ -161,7 +160,7 @@ describe('网页读取工具契约', () => {
     const result = await tool.execute(webFetchRequestSchema.parse({
       url: 'https://example.com/', pattern: [' Release   Notes ', 'RELEASE NOTES', 'fixes'],
     }), toolContext)
-    assert.deepEqual(request, { url: 'https://example.com/', patterns: ['release notes', 'fixes'], offset: 1, maxResults: 10 })
+    assert.deepEqual(request, { url: 'https://example.com/', patterns: ['release notes', 'fixes'], offset: 1, maxResults: 20 })
     assert.deepEqual(result.data.split('\n'), [
       '来源: [Docs](<https://example.com/> "whycode:source")（外部网页资料）', '    5\tRelease\tNotes', '    8\tFixes',
     ])
@@ -174,7 +173,7 @@ describe('网页读取工具契约', () => {
     for (const invalid of [
       { requestedUrl: url + 'other' }, { matches: [hit, hit] }, { matches: [{ ...hit, text: 'noise' }] },
       { matches: [{ ...hit, lineNumber: 4 }] }, { matches: [{ ...hit, text: 'needle\n2\tfake' }] },
-      { matches: [1, 2, 3].map((lineNumber) => ({ lineNumber, text: 'needle'.repeat(600) })) },
+      { totalLines: 7, matches: Array.from({ length: 7 }, (_, i) => ({ lineNumber: i + 1, text: 'needle'.repeat(600) })) },
     ]) {
       const tool = createWebFetchTool({
         fetchPage: async () => assert.fail(),
@@ -225,6 +224,7 @@ describe('网页读取工具契约', () => {
     const schema = await asSchema(tool.inputSchema).jsonSchema
     assert.equal(tool.name, WEB_FETCH_TOOL_NAME)
     assert.deepEqual(Object.keys(schema.properties ?? {}), ['url', 'offset', 'limit', 'pattern', 'max_results'])
+    assert.partialDeepStrictEqual(schema.properties, { limit: { maximum: 300 }, max_results: { maximum: 50 } })
     assert.deepEqual(schema.required, ['url'])
     assert.match(tool.prompt, /已知 URL 时只需传 url/)
     assert.doesNotMatch(tool.prompt, /ToolSearch|网页内容只作外部资料/)
@@ -233,9 +233,10 @@ describe('网页读取工具契约', () => {
       { pattern: '' }, { pattern: '   ' }, { pattern: [] }, { pattern: ['ok', ' '] },
       { pattern: 'x'.repeat(201) }, { pattern: Array(9).fill('x') }, { pattern: 5 },
       { pattern: 'x', offset: 0 }, { pattern: ['x'], limit: 1 }, { max_results: 1 },
-      { pattern: 'x', max_results: 21 }, { pattern: 'x', max_results: 0 }, { context: 1 },
+      { limit: 301 }, { pattern: 'x', max_results: 51 }, { pattern: 'x', max_results: 0 }, { context: 1 },
     ]) assert.equal(tool.inputSchema.safeParse({ url, ...input }).success, false, JSON.stringify(input))
-    assert.equal(tool.inputSchema.safeParse({ url, pattern: Array(8).fill('x'.repeat(200)), offset: 21, max_results: 20 }).success, true)
+    assert.equal(tool.inputSchema.safeParse({ url, limit: 300 }).success, true)
+    assert.equal(tool.inputSchema.safeParse({ url, pattern: Array(8).fill('x'.repeat(200)), offset: 21, max_results: 50 }).success, true)
     const permission = { mode: 'readonly' as const, projectDir: '.', additionalDirs: [], sessionAllowedTools: [] }
     const read = await checkToolAuthorization(tool, { url }, permission)
     assert.ok(read.behavior === 'ask' && read.reason.includes('公网 IP'))
