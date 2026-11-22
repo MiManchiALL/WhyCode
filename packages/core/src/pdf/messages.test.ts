@@ -35,7 +35,10 @@ describe('PDF 模型引用', () => {
     const lines = text.split('\n').filter(line => line.startsWith('{'))
     assert.ok(lines.reduce((total, line) => total + line.length, 0) <= 20_000)
     assert.ok(lines.length > 50 && lines.length < attachments.length)
-    assert.equal(JSON.parse(lines.at(-1)!).name, attachments.at(-1)!.name)
+    const latest = attachments.at(-1)!
+    assert.deepEqual(JSON.parse(lines.at(-1)!), {
+      path: `attachment://${latest.id}`, name: latest.name, pageCount: latest.pageCount,
+    })
     assert.match(text, /较早的 .* PDF 引用未重注入/)
   })
   it('只从 user 引用块恢复附件身份，不采信普通文字或 assistant 工具参数', () => {

@@ -82,7 +82,6 @@ function referenceLine(attachment: PdfAttachment, recent = false): string {
     path: attachmentReference(attachment.id),
     name: attachment.name,
     pageCount: attachment.pageCount,
-    byteLength: attachment.byteLength,
     ...(attachment.origin ? { origin: attachment.origin } : {}),
     ...(recent ? { recentUserUpload: true } : {}),
   })

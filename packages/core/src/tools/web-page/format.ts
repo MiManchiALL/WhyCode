@@ -31,7 +31,6 @@ export function formatFetchResponse(
       ...(response.requestedUrl !== response.finalUrl
         ? [`原始地址: <${response.requestedUrl}>`]
         : []),
-      `共 ${attachment.pageCount} 页，${attachment.byteLength} 字节`,
       `ReadFile ${JSON.stringify({ path: attachmentReference(attachment.id) })}`,
     ].join('\n')
   }
