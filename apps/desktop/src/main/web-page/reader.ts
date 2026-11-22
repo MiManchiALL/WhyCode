@@ -1,5 +1,5 @@
 import {
-  WEB_FETCH_MAX_LINES,
+  WEB_FETCH_DEFAULT_LINES,
   WEB_FETCH_MAX_OUTPUT_CHARS,
   normalizeWebFindText,
   WebPageError,
@@ -62,7 +62,7 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
       page,
       requestedUrl,
       request.offset ?? 1,
-      request.limit ?? WEB_FETCH_MAX_LINES,
+      request.limit ?? WEB_FETCH_DEFAULT_LINES,
     )
   }
 

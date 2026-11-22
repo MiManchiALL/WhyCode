@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  WEB_FETCH_MAX_OUTPUT_CHARS,
   createWebFetchTool,
   type WebFetchPageResponse,
   type WebFetchResponse,
@@ -104,6 +103,25 @@ describe('会话级网页正文读取器', () => {
     assert.equal(fetches, 1)
   })
 
+  it('默认读取 100 行，显式请求可返回 300 行并从第 301 行续读', async () => {
+    const url = 'https://example.com/rows'
+    const rows = Array.from({ length: 301 }, (_, i) => `正文 ${i + 1}`)
+    const tool = createWebFetchTool(createTestReader({
+      fetchDocument: async () => ({
+        kind: 'text', requestedUrl: url, finalUrl: url, contentType: 'text/plain', text: rows.join('\n'),
+      }),
+    }))
+    const ctx = { projectDir: '.', additionalDirs: [], abortSignal: activeSignal }
+    const first = await tool.execute({ url }, ctx)
+    assert.match(first.data, /L1-L100）/)
+    assert.match(first.data, /offset=101/)
+    const expanded = await tool.execute(tool.inputSchema.parse({ url, limit: 300 }), ctx)
+    assert.match(expanded.data, /L1-L300）/)
+    assert.match(expanded.data, /offset=301/)
+    const tail = await tool.execute({ url, offset: 301 }, ctx)
+    assert.match(tail.data, /301\t正文 301$/)
+  })
+
   it('所有关键词共享名额，优先覆盖稀有词，同一行只显示一次', async () => {
     const url = 'https://example.com/guide'
     const reader = createTestReader({
@@ -124,10 +142,11 @@ describe('会话级网页正文读取器', () => {
     assert.deepEqual((await reader.findInPage({ url, patterns: ['missing'], offset: 1, maxResults: 20 }, activeSignal)).matches, [])
   })
 
-  it('跟随查找结果的 offset 取全 47 个匹配，换页大小及提前返回页尾关键词均不遗漏或重复', async () => {
+  it('跟随 offset 分别取默认 20、7 和 50 个匹配，页尾关键词亦不遗漏或重复', async () => {
     const url = 'https://example.com/list'
-    const expected = Array.from({ length: 47 }, (_, i) => (i + 1) * 2)
-    const text = expected.map((line) => 'section\n' + (line === 94 ? 'item rare' : 'item')).join('\n')
+    const expected = Array.from({ length: 77 }, (_, i) => (i + 1) * 2)
+    const lastLine = expected.at(-1)!
+    const text = expected.map((line) => 'section\n' + (line === lastLine ? 'item rare' : 'item')).join('\n')
     let fetches = 0
     const reader = createTestReader({
       fetchDocument: async () => {
@@ -140,14 +159,14 @@ describe('会话级网页正文读取器', () => {
     assert.equal((await tool.execute({ url, limit: 1 }, ctx)).isError, false)
     const seen: number[] = []
     let offset = 1
-    for (const max_results of [20, 7, 20]) {
+    for (const max_results of [undefined, 7, 50]) {
       const input = { url, pattern: ['item', 'rare'], offset, max_results }
       const result = await tool.execute(tool.inputSchema.parse(input), ctx)
       assert.equal(result.isError, false)
       const rows = [...result.data.matchAll(/^ *(\d+)\t/gmu)].map((hit) => Number(hit[1]))
-      assert.equal(rows.length, max_results)
+      assert.equal(rows.length, max_results ?? 20)
       assert.deepEqual(rows, rows.toSorted((a, b) => a - b))
-      if (offset === 1) assert.ok(rows.includes(94))
+      if (offset === 1) assert.ok(rows.includes(lastLine))
       if (offset === 21) assert.deepEqual(await tool.execute(input, ctx), result)
       seen.push(...rows)
       const hint = /offset=(\d+)/u.exec(result.data)
@@ -160,11 +179,11 @@ describe('会话级网页正文读取器', () => {
       }
     }
     assert.deepEqual(seen.toSorted((a, b) => a - b), expected)
-    const beyond = await tool.execute({ url, pattern: 'item', offset: 48 }, ctx)
+    const beyond = await tool.execute({ url, pattern: 'item', offset: 78 }, ctx)
     assert.equal(beyond.isError, false)
     assert.match(beyond.data, /没有更多结果/)
     assert.doesNotMatch(beyond.data, /offset=|未找到匹配文本/)
-    assert.match((await tool.execute({ url, offset: 94, limit: 1 }, ctx)).data, /94\titem rare/)
+    assert.ok((await tool.execute({ url, offset: lastLine, limit: 1 }, ctx)).data.endsWith(`${lastLine}\titem rare`))
     assert.equal(fetches, 1)
   })
 
@@ -208,14 +227,14 @@ describe('会话级网页正文读取器', () => {
   })
 
   it('每次分页结果受字符预算约束，并保留继续读取的真实行号', async () => {
-    const longLine = 'A'.repeat(4_000)
+    const longLine = 'A'.repeat(3_900)
     const reader = createTestReader({
       fetchDocument: async (url) => ({
         kind: 'text',
         requestedUrl: url,
         finalUrl: url,
         contentType: 'text/plain',
-        text: [longLine, longLine, longLine, 'A short tail'].join('\n'),
+        text: [...Array<string>(7).fill(longLine), 'A short tail'].join('\n'),
       }),
     })
 
@@ -225,19 +244,17 @@ describe('会话级网页正文读取器', () => {
       limit: 100,
     }, activeSignal)
     const resultPage = page(result)
-    assert.equal(resultPage.lines.length, 2)
-    assert.equal(resultPage.lines.reduce((sum, line) => sum + line.length, 0)
-      <= WEB_FETCH_MAX_OUTPUT_CHARS, true)
-    assert.equal(resultPage.totalLines, 4)
+    assert.deepEqual(resultPage.lines, Array<string>(6).fill(longLine))
+    assert.equal(resultPage.totalLines, 8)
     const tool = createWebFetchTool(reader)
     const ctx = { projectDir: '.', additionalDirs: [], abortSignal: activeSignal }
     const input = { url: resultPage.finalUrl, pattern: 'a', max_results: 20 }
     const first = await tool.execute(input, ctx)
-    assert.match(first.data, /offset=3/)
+    assert.match(first.data, /offset=7/)
     assert.doesNotMatch(first.data, /A short tail/)
-    const next = await tool.execute({ ...input, offset: 3 }, ctx)
+    const next = await tool.execute({ ...input, offset: 7 }, ctx)
     assert.equal(next.isError, false)
-    assert.match(next.data, /3\tA+\n +4\tA short tail$/)
+    assert.match(next.data, /7\tA+\n +8\tA short tail$/)
   })
 
   it('替代页失效后继续使用已提取的 HTML，后续分页和查找不重试', async () => {
