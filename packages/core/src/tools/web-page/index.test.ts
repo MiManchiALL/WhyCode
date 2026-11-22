@@ -161,7 +161,7 @@ describe('网页读取工具契约', () => {
     const result = await tool.execute(webFetchRequestSchema.parse({
       url: 'https://example.com/', pattern: [' Release   Notes ', 'RELEASE NOTES', 'fixes'],
     }), toolContext)
-    assert.deepEqual(request, { url: 'https://example.com/', patterns: ['release notes', 'fixes'], maxResults: 10 })
+    assert.deepEqual(request, { url: 'https://example.com/', patterns: ['release notes', 'fixes'], offset: 1, maxResults: 10 })
     assert.deepEqual(result.data.split('\n'), [
       '来源: [Docs](<https://example.com/> "whycode:source")（外部网页资料）', '    5\tRelease\tNotes', '    8\tFixes',
     ])
@@ -232,10 +232,10 @@ describe('网页读取工具契约', () => {
     for (const input of [
       { pattern: '' }, { pattern: '   ' }, { pattern: [] }, { pattern: ['ok', ' '] },
       { pattern: 'x'.repeat(201) }, { pattern: Array(9).fill('x') }, { pattern: 5 },
-      { pattern: 'x', offset: 2 }, { pattern: ['x'], limit: 1 }, { max_results: 1 },
+      { pattern: 'x', offset: 0 }, { pattern: ['x'], limit: 1 }, { max_results: 1 },
       { pattern: 'x', max_results: 21 }, { pattern: 'x', max_results: 0 }, { context: 1 },
     ]) assert.equal(tool.inputSchema.safeParse({ url, ...input }).success, false, JSON.stringify(input))
-    assert.equal(tool.inputSchema.safeParse({ url, pattern: Array(8).fill('x'.repeat(200)), max_results: 20 }).success, true)
+    assert.equal(tool.inputSchema.safeParse({ url, pattern: Array(8).fill('x'.repeat(200)), offset: 21, max_results: 20 }).success, true)
     const permission = { mode: 'readonly' as const, projectDir: '.', additionalDirs: [], sessionAllowedTools: [] }
     const read = await checkToolAuthorization(tool, { url }, permission)
     assert.ok(read.behavior === 'ask' && read.reason.includes('公网 IP'))

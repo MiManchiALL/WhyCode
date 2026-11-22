@@ -76,9 +76,11 @@ export function formatFindResponse(
   if (!isRecord(value) || !Array.isArray(value.matches)) throw invalidFindResponse()
   const finalUrl = normalizeWebPageUrl(value.finalUrl)
   const totalLines = normalizedInteger(value.totalLines, 0)
+  const lastMatchPosition = request.offset - 1 + value.matches.length
   if (normalizeWebPageUrl(value.requestedUrl) !== request.url || !finalUrl || totalLines === null
     || typeof value.hasMore !== 'boolean' || value.matches.length > request.maxResults
-    || (value.hasMore && (!value.matches.length || value.matches.length >= totalLines))) {
+    || (value.matches.length > 0 && lastMatchPosition > totalLines)
+    || (value.hasMore && (!value.matches.length || lastMatchPosition >= totalLines))) {
     throw invalidFindResponse()
   }
 
@@ -99,8 +101,8 @@ export function formatFindResponse(
     output.push(`${String(line).padStart(5)}\t${text}`)
     previous = line
   }
-  if (!value.matches.length) output.push('缓存正文中未找到匹配文本。')
-  if (value.hasMore) output.push('[还有匹配行未显示]')
+  if (!value.matches.length) output.push(request.offset === 1 ? '缓存正文中未找到匹配文本。' : '该匹配位置没有更多结果。')
+  if (value.hasMore) output.push(`[保持相同的 pattern，用 offset=${lastMatchPosition + 1} 继续查找]`)
   return output.join('\n')
 }
 

@@ -34,6 +34,7 @@ export function createWebFetchTool(reader: WebPageReader) {
           const request = {
             url: input.url,
             patterns: [...new Set(keywords.map(normalizeWebFindText))],
+            offset: input.offset ?? 1,
             maxResults: input.max_results ?? WEB_FETCH_DEFAULT_RESULTS,
           }
           const response = await reader.findInPage(request, ctx.abortSignal)

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { assertPublicWebTarget, parseWebPageUrl } from './url-safety.ts'
+import { assertPublicWebTarget, pageMarkdownUrl, parseWebPageUrl } from './url-safety.ts'
 
 describe('网页目标地址安全校验', () => {
   it('只接受无凭据的 HTTP/HTTPS URL，并移除 fragment', () => {
@@ -11,6 +11,21 @@ describe('网页目标地址安全校验', () => {
     assert.throws(() => parseWebPageUrl('file:///C:/secret'), /只支持/)
     assert.throws(() => parseWebPageUrl('https://user:pass@example.com'), /只支持/)
     assert.throws(() => parseWebPageUrl(`https://example.com/${'a'.repeat(2_048)}`), /无效/)
+  })
+
+  it('替代页保留所有记录参数、重复次数与同名值的顺序，允许切换 Markdown 表示', () => {
+    const page = 'https://example.com/article?id=1&tag=x&tag=y&format=html'
+    const alternate = 'https://example.com/article.md?tag=x&tag=y&format=markdown&id=1'
+    assert.equal(pageMarkdownUrl(alternate, page), alternate)
+    for (const query of [
+      'id=1&id=2&tag=x&tag=y',
+      'id=1&id=1&tag=x&tag=y',
+      'id=1&tag=y&tag=x',
+      'id=1&tag=x',
+      'id=1&tag=x&tag=y&version=2',
+      'id=1&tag=x&tag=y&format=summary',
+      'id=1&tag=x&tag=y&format=md&format=summary',
+    ]) assert.equal(pageMarkdownUrl('article.md?' + query, page), undefined, query)
   })
 
   it('拒绝本机、私网、保留地址及其 IPv6 映射形式', async () => {

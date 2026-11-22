@@ -27,27 +27,27 @@ export const webFetchRequestSchema = z.strictObject({
     .int()
     .min(1)
     .optional()
-    .describe('读取正文的起始行号，从 1 开始'),
+    .describe('从 1 开始。读取时为正文行号，查找时为匹配结果序号，续查用上次返回的 offset'),
   limit: z.number()
     .int()
     .min(1)
     .max(WEB_FETCH_MAX_LINES)
     .optional()
-    .describe(`读取正文的最多行数，默认及最大均为 ${WEB_FETCH_MAX_LINES}`),
+    .describe(`仅用于读取正文，默认及最多 ${WEB_FETCH_MAX_LINES} 行`),
   pattern: z.union([keyword, z.array(keyword).min(1).max(MAX_PATTERNS)]).optional()
-    .describe('在缓存正文中做不区分大小写的字面查找，匹配任一关键词。与 offset、limit 分开使用'),
+    .describe('在缓存正文中做不区分大小写的字面查找，匹配任一关键词'),
   max_results: z.number()
     .int()
     .min(1)
     .max(MAX_RESULTS)
     .optional()
-    .describe(`仅查找时使用，所有关键词合计返回的匹配行数，默认 ${WEB_FETCH_DEFAULT_RESULTS}，最大 ${MAX_RESULTS}`),
+    .describe(`仅用于查找，所有关键词每页合计的匹配行数，默认 ${WEB_FETCH_DEFAULT_RESULTS}，最大 ${MAX_RESULTS}`),
 }).superRefine((input, ctx) => {
   if (input.pattern === undefined && input.max_results !== undefined) {
     ctx.addIssue({ code: 'custom', path: ['max_results'], message: 'max_results 需要与 pattern 一起使用' })
   }
-  if (input.pattern !== undefined && (input.offset !== undefined || input.limit !== undefined)) {
-    ctx.addIssue({ code: 'custom', path: ['pattern'], message: '查找和分页请分开调用' })
+  if (input.pattern !== undefined && input.limit !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['limit'], message: 'limit 仅用于读取正文，查找数量请用 max_results' })
   }
 })
 
@@ -85,6 +85,7 @@ export type WebFetchResponse = WebFetchPageResponse | WebFetchPdfResponse
 export interface WebFindRequest {
   url: string
   patterns: readonly string[]
+  offset: number
   maxResults: number
 }
 

@@ -67,7 +67,7 @@ describe('WebFetch Agent 链路', () => {
     const calls: string[] = []
     const model = new MockLanguageModelV4({ doStream: [
       toolStep({ url, pattern: 'cache', limit: 1 }, 'mixed'),
-      toolStep({ url, pattern: ['cache', 'page'] }, 'find'),
+      toolStep({ url, pattern: ['cache', 'page'], offset: 21 }, 'find'),
       toolStep({ url, limit: 1 }, 'read'),
       finalStep('完成。'),
     ] })
@@ -87,7 +87,7 @@ describe('WebFetch Agent 链路', () => {
     })
     assert.equal(await session.handleUserMessage('查找网页关键词'), 'completed')
     assert.deepEqual(calls, ['find', 'approve', 'read'])
-    assert.match(JSON.stringify(model.doStreamCalls[1]?.prompt), /查找和分页请分开调用/)
+    assert.match(JSON.stringify(model.doStreamCalls[1]?.prompt), /limit 仅用于读取正文/)
     assert.match(JSON.stringify(model.doStreamCalls[2]?.prompt), /缓存未命中/)
   })
 

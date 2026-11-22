@@ -61,6 +61,7 @@ describe('会话级网页正文读取器', () => {
     const found = await reader.findInPage({
       url: 'https://example.com/final',
       patterns: ['release notes'],
+      offset: 1,
       maxResults: 10,
     }, activeSignal)
 
@@ -92,6 +93,7 @@ describe('会话级网页正文读取器', () => {
     const findRequest = {
       url: 'https://example.com/',
       patterns: ['cached'],
+      offset: 1,
       maxResults: 5,
     }
 
@@ -111,7 +113,7 @@ describe('会话级网页正文读取器', () => {
       }),
     })
     await reader.fetchPage({ url, limit: 1 }, activeSignal)
-    const find = (maxResults: number) => reader.findInPage({ url, patterns: ['rare word', 'common'], maxResults }, activeSignal)
+    const find = (maxResults: number) => reader.findInPage({ url, patterns: ['rare word', 'common'], offset: 1, maxResults }, activeSignal)
     const shared = await find(3)
     assert.deepEqual(shared.matches.map((row) => row.lineNumber), [1, 2, 4])
     assert.equal(shared.hasMore, true)
@@ -119,7 +121,51 @@ describe('会话级网页正文读取器', () => {
     const all = await find(4)
     assert.deepEqual(all.matches.map((row) => row.lineNumber), [1, 2, 3, 4])
     assert.equal(all.hasMore, false)
-    assert.deepEqual((await reader.findInPage({ url, patterns: ['missing'], maxResults: 20 }, activeSignal)).matches, [])
+    assert.deepEqual((await reader.findInPage({ url, patterns: ['missing'], offset: 1, maxResults: 20 }, activeSignal)).matches, [])
+  })
+
+  it('跟随查找结果的 offset 取全 47 个匹配，换页大小及提前返回页尾关键词均不遗漏或重复', async () => {
+    const url = 'https://example.com/list'
+    const expected = Array.from({ length: 47 }, (_, i) => (i + 1) * 2)
+    const text = expected.map((line) => 'section\n' + (line === 94 ? 'item rare' : 'item')).join('\n')
+    let fetches = 0
+    const reader = createTestReader({
+      fetchDocument: async () => {
+        fetches++
+        return { kind: 'text', requestedUrl: url, finalUrl: url, contentType: 'text/plain', text }
+      },
+    })
+    const tool = createWebFetchTool(reader)
+    const ctx = { projectDir: '.', additionalDirs: [], abortSignal: activeSignal }
+    assert.equal((await tool.execute({ url, limit: 1 }, ctx)).isError, false)
+    const seen: number[] = []
+    let offset = 1
+    for (const max_results of [20, 7, 20]) {
+      const input = { url, pattern: ['item', 'rare'], offset, max_results }
+      const result = await tool.execute(tool.inputSchema.parse(input), ctx)
+      assert.equal(result.isError, false)
+      const rows = [...result.data.matchAll(/^ *(\d+)\t/gmu)].map((hit) => Number(hit[1]))
+      assert.equal(rows.length, max_results)
+      assert.deepEqual(rows, rows.toSorted((a, b) => a - b))
+      if (offset === 1) assert.ok(rows.includes(94))
+      if (offset === 21) assert.deepEqual(await tool.execute(input, ctx), result)
+      seen.push(...rows)
+      const hint = /offset=(\d+)/u.exec(result.data)
+      if (seen.length < expected.length) {
+        assert.ok(hint)
+        offset = Number(hint[1])
+        assert.equal(offset, seen.length + 1)
+      } else {
+        assert.equal(hint, null)
+      }
+    }
+    assert.deepEqual(seen.toSorted((a, b) => a - b), expected)
+    const beyond = await tool.execute({ url, pattern: 'item', offset: 48 }, ctx)
+    assert.equal(beyond.isError, false)
+    assert.match(beyond.data, /没有更多结果/)
+    assert.doesNotMatch(beyond.data, /offset=|未找到匹配文本/)
+    assert.match((await tool.execute({ url, offset: 94, limit: 1 }, ctx)).data, /94\titem rare/)
+    assert.equal(fetches, 1)
   })
 
   it('同页显式 Markdown 优先，原地址、跳转页和最终证据地址可复用同一缓存', async () => {
@@ -137,8 +183,8 @@ describe('会话级网页正文读取器', () => {
           '<html><head><title>指南</title><link rel="alternate" type="text/markdown" href="guide.md"></head><body><main>HTML 正文</main></body></html>',
           { headers: { 'content-type': 'text/html' } },
         )
-        if (path === '/guide.md') return Response.redirect(origin + '/raw/guide.md')
-        assert.equal(path, '/raw/guide.md')
+        if (path === '/guide.md') return Response.redirect(origin + '/guide/index.md')
+        assert.equal(path, '/guide/index.md')
         return new Response('# 指南\nrequest_timeout', { headers: { 'content-type': 'text/plain' } })
       },
     }
@@ -150,15 +196,15 @@ describe('会话级网页正文读取器', () => {
     const ctx = { projectDir: '.', additionalDirs: [], abortSignal: activeSignal }
     const first = await tool.execute({ url: origin + '/start', limit: 1 }, ctx)
     assert.equal(first.isError, false)
-    assert.match(first.data, /\[指南\].*\/raw\/guide\.md>.*L1-L1/)
-    for (const path of ['/start', '/guide', '/guide.md', '/raw/guide.md']) {
+    assert.match(first.data, /\[指南\].*\/guide\/index\.md>.*L1-L1/)
+    for (const path of ['/start', '/guide', '/guide.md', '/guide/index.md']) {
       const url = origin + path
       const find = await tool.execute({ url, pattern: ['missing', 'REQUEST_TIMEOUT'] }, ctx)
       assert.equal(find.isError, false)
       assert.match(find.data, /2\trequest_timeout/)
       assert.match((await tool.execute({ url, offset: 2 }, ctx)).data, /2\trequest_timeout/)
     }
-    assert.deepEqual(calls, ['/start', '/guide', '/guide.md', '/raw/guide.md'])
+    assert.deepEqual(calls, ['/start', '/guide', '/guide.md', '/guide/index.md'])
   })
 
   it('每次分页结果受字符预算约束，并保留继续读取的真实行号', async () => {
@@ -169,7 +215,7 @@ describe('会话级网页正文读取器', () => {
         requestedUrl: url,
         finalUrl: url,
         contentType: 'text/plain',
-        text: [longLine, longLine, longLine].join('\n'),
+        text: [longLine, longLine, longLine, 'A short tail'].join('\n'),
       }),
     })
 
@@ -182,10 +228,16 @@ describe('会话级网页正文读取器', () => {
     assert.equal(resultPage.lines.length, 2)
     assert.equal(resultPage.lines.reduce((sum, line) => sum + line.length, 0)
       <= WEB_FETCH_MAX_OUTPUT_CHARS, true)
-    assert.equal(resultPage.totalLines, 3)
-    const found = await reader.findInPage({ url: resultPage.finalUrl, patterns: ['a'], maxResults: 20 }, activeSignal)
-    assert.deepEqual(found.matches.map((row) => row.lineNumber), [1, 2])
-    assert.equal(found.hasMore, true)
+    assert.equal(resultPage.totalLines, 4)
+    const tool = createWebFetchTool(reader)
+    const ctx = { projectDir: '.', additionalDirs: [], abortSignal: activeSignal }
+    const input = { url: resultPage.finalUrl, pattern: 'a', max_results: 20 }
+    const first = await tool.execute(input, ctx)
+    assert.match(first.data, /offset=3/)
+    assert.doesNotMatch(first.data, /A short tail/)
+    const next = await tool.execute({ ...input, offset: 3 }, ctx)
+    assert.equal(next.isError, false)
+    assert.match(next.data, /3\tA+\n +4\tA short tail$/)
   })
 
   it('替代页失效后继续使用已提取的 HTML，后续分页和查找不重试', async () => {
@@ -207,11 +259,46 @@ describe('会话级网页正文读取器', () => {
     const first = page(await reader.fetchPage({ url, limit: 1 }, activeSignal))
     assert.equal(first.finalUrl, url)
     assert.match(first.lines[0]!, /guide_title/)
-    const find = await reader.findInPage({ url, patterns: ['request_timeout'], maxResults: 1 }, activeSignal)
+    const find = await reader.findInPage({ url, patterns: ['request_timeout'], offset: 1, maxResults: 1 }, activeSignal)
     assert.equal(find.matches[0]?.text, 'request_timeout')
     assert.equal(page(await reader.fetchPage({ url, offset: find.matches[0]!.lineNumber }, activeSignal)).lines[0], 'request_timeout')
-    await assert.rejects(reader.findInPage({ url: url + '.md', patterns: ['login'], maxResults: 1 }, activeSignal), /缓存/)
+    await assert.rejects(reader.findInPage({ url: url + '.md', patterns: ['login'], offset: 1, maxResults: 1 }, activeSignal), /缓存/)
     assert.deepEqual(calls, [url, url + '.md'])
+  })
+
+  it('替代链接或后续跳转改变文章身份时，缓存和引用均保留原文', async () => {
+    const url = 'https://example.com/article?id=1'
+    const linked = 'https://example.com/article.md?id=1'
+    const other = 'https://example.com/other.md'
+    for (const href of [linked + '&id=2', linked]) {
+      const calls: string[] = []
+      const network: WebDocumentFetcherOptions = {
+        resolveHost: async () => ({ endpoints: [{ address: '93.184.216.34' }] }),
+        fetchImpl: async (target) => {
+          calls.push(target)
+          if (target === url) return new Response(
+            `<html><head><link rel="alternate" type="text/markdown" href="${href.replaceAll('&', '&amp;')}"></head><body><main>Original article</main></body></html>`,
+            { headers: { 'content-type': 'text/html' } },
+          )
+          if (target === linked) return Response.redirect(other)
+          return new Response('# Different article', { headers: { 'content-type': 'text/markdown' } })
+        },
+      }
+      const tool = createWebFetchTool(createTestReader({
+        fetchDocument: createWebDocumentFetcher(network),
+        fetchLinkedMarkdown: (target, pageUrl, signal) => fetchLinkedMarkdown(target, pageUrl, network, signal),
+      }))
+      const ctx = { projectDir: '.', additionalDirs: [], abortSignal: activeSignal }
+      for (const input of [{ url }, { url, pattern: 'article' }]) {
+        const result = await tool.execute(input, ctx)
+        assert.equal(result.isError, false)
+        assert.ok(result.data.includes(`<${url}> "whycode:source"`))
+        assert.match(result.data, /1\tOriginal article/)
+        assert.doesNotMatch(result.data, /Different/)
+      }
+      assert.equal((await tool.execute({ url: other, pattern: 'article' }, ctx)).isError, true)
+      assert.deepEqual(calls, href === linked ? [url, linked] : [url])
+    }
   })
 
   it('同一 URL 的并行分页只抓取和提取一次', async () => {
@@ -281,6 +368,7 @@ describe('会话级网页正文读取器', () => {
     await assert.rejects(reader.findInPage({
       url: 'https://example.com/download',
       patterns: ['anything'],
+      offset: 1,
       maxResults: 1,
     }, activeSignal), /ReadFile/)
   })

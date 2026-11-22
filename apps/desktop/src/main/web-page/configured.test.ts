@@ -70,7 +70,7 @@ describe('配置化网页抓取', () => {
     assert.equal(next.kind, 'page')
     if (next.kind !== 'page') assert.fail()
     assert.deepEqual(next.lines, ['needle', 'last'])
-    const found = await reader.findInPage({ url: 'https://example.com/', patterns: ['needle'], maxResults: 10 }, signal)
+    const found = await reader.findInPage({ url: 'https://example.com/', patterns: ['needle'], offset: 1, maxResults: 10 }, signal)
     assert.equal(found.matches[0]?.lineNumber, 4)
     assert.ok(first.totalLines < WEB_PAGE_MAX_CONTENT_CHARS)
     assert.equal(calls, 1)

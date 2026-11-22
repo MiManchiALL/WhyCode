@@ -1,6 +1,7 @@
 import { PDF_ATTACHMENT_MAX_SOURCE_BYTES, WebPageError } from '@whycode/core'
 import {
   assertPublicWebTarget,
+  pageMarkdownUrl,
   parseWebPageUrl,
   type WebHostResolver,
 } from './url-safety.ts'
@@ -74,12 +75,11 @@ export async function fetchLinkedMarkdown(
   options: WebDocumentFetcherOptions,
   abortSignal: AbortSignal,
 ): Promise<WebTextDocument | null> {
-  const target = parseWebPageUrl(url)
   const signal = AbortSignal.any([abortSignal, AbortSignal.timeout(options.timeoutMs ?? WEB_DOCUMENT_TIMEOUT_MS)])
   try {
-    const { response, finalUrl } = await fetchPublicWebResponse(target, options, signal,
+    const { response, finalUrl } = await fetchPublicWebResponse(parseWebPageUrl(url), options, signal,
       'text/markdown, text/x-markdown, text/plain;q=0.8',
-      (next) => next.origin === target.origin && next.href !== pageUrl)
+      (candidate) => pageMarkdownUrl(candidate.href, pageUrl) !== undefined)
     const { mediaType, charset } = parseContentType(response.headers.get('content-type'))
     if (mediaType !== 'text/markdown' && mediaType !== 'text/x-markdown' && mediaType !== 'text/plain') {
       await response.body?.cancel()
@@ -101,10 +101,11 @@ export async function fetchPublicWebResponse(
   options: WebDocumentFetcherOptions,
   signal: AbortSignal,
   accept: string,
-  allowRedirect?: (url: URL) => boolean,
+  allowTarget?: (url: URL) => boolean,
 ): Promise<{ response: Response; finalUrl: string }> {
   let currentUrl = initialUrl
   for (let redirects = 0; ; redirects++) {
+    if (allowTarget && !allowTarget(currentUrl)) throw new WebPageError('网页地址超出本次请求范围')
     await assertPublicWebTarget(currentUrl, options.resolveHost, signal)
     const response = await options.fetchImpl(currentUrl.toString(), {
       method: 'GET',
@@ -124,7 +125,6 @@ export async function fetchPublicWebResponse(
         throw new WebPageError('目标网站重定向次数过多')
       }
       currentUrl = redirectUrl(location, currentUrl)
-      if (allowRedirect && !allowRedirect(currentUrl)) throw new WebPageError('网页重定向超出本站范围')
       continue
     }
     if (!response.ok) {
