@@ -1,7 +1,7 @@
 import { localWorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
-import { displayToolPath, resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
+import { displayToolPath, resolveAllowed, rethrowTargetError, IGNORED_DIRS } from '../fs-utils.ts'
 import { fileGlob, incompleteScan, walkSearchFiles } from '../search/fallback.ts'
 import { runRipgrepLines, SEARCH_EXCLUSIONS } from '../search/ripgrep.ts'
 import { withSearchDeadline } from '../search/deadline.ts'
@@ -69,6 +69,8 @@ export const globTool = buildTool({
 
       const root = await resolveAllowed(ctx, input.path ?? '.')
       ctx.abortSignal.throwIfAborted()
+      const stats = await io.fs.stat(root).catch(error => rethrowTargetError(error, '搜索路径'))
+      if (!stats.isDirectory()) return { data: '搜索路径应为目录', isError: true }
       const page = new SearchPage(input.offset ?? 0, input.limit ?? DEFAULT_GLOB_LIMIT)
       const pattern = input.pattern.replaceAll('\\', '/').replace(/^\.\//, '/')
       const add = (path: string) => page.add(displayToolPath(ctx.projectDir, root, path, io))
