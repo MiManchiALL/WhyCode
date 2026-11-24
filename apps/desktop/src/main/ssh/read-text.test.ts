@@ -29,7 +29,7 @@ it('SSH 与本机文本分页相同，包括实际末行、不同换行、超长
   for (const path of ['folder', 'empty', 'binary']) await compare({ path })
   for (const path of ['missing', 'missing/subdir/file.txt']) {
     await assert.rejects(tool.execute({ path }, { ...context, workspaceIO: io, projectDir: env.project }),
-      { message: '文件不存在：' + path })
+      { message: '文件不存在' })
   }
   for (const [offset, column, limit] of [[1, 1, 3], [3, 2, 1], [4, 107998, 2], [5, 2, 1], [5, 4, 1],
     [6, 1, 1], [7, 1, 1]] as const) {

@@ -37,7 +37,7 @@ export const grepTool = buildTool({
       const io = ctx.workspaceIO ?? localWorkspaceIO
       const path = await resolveAllowed(ctx, input.path ?? '.')
       ctx.abortSignal.throwIfAborted()
-      const stats = await io.fs.stat(path).catch(error => rethrowTargetError(error, ctx, path, '搜索路径'))
+      const stats = await io.fs.stat(path).catch(error => rethrowTargetError(error, '搜索路径'))
       ctx.abortSignal.throwIfAborted()
       if (!stats.isDirectory() && !stats.isFile()) {
         return { data: `搜索失败：${input.path ?? '.'} 不是普通文件或目录`, isError: true }

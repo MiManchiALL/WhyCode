@@ -73,7 +73,7 @@ describe('桌面 PDF 引擎', () => {
     assert.deepEqual(fileResult.data.split('\n').slice(-2), ['第 1 页，共 1 页', '</whycode-pdf-pages>'])
     await assert.rejects(fileReader.execute({ path: 'missing/file.pdf' }, {
       projectDir: root, additionalDirs: [], abortSignal: new AbortController().signal,
-    }), { message: '文件不存在：missing/file.pdf' })
+    }), { message: '文件不存在' })
     assert.doesNotMatch(fileResult.data, /Hello WhyCode PDF/)
     const savedPage = await readFile(join(root, 'attachments', fileResult.attachments![0]!.storageName))
     assert.deepEqual([...savedPage.subarray(0, 3)], [0xff, 0xd8, 0xff])

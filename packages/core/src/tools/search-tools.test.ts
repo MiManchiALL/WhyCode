@@ -145,7 +145,7 @@ describe('高性能搜索工具', () => {
     const external = await fixture()
     const target = join(external.root, 'missing')
     await assert.rejects(grepTool.execute({ path: target, pattern: 'x' }, { ...ctx, additionalDirs: [external.root] }),
-      { message: '搜索路径不存在：' + target.replaceAll('\\', '/') })
+      { message: '搜索路径不存在' })
     const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' })
     await assert.rejects(grepTool.execute({ pattern: 'x' }, {
       ...ctx, workspaceIO: { ...localWorkspaceIO, fs: { ...localWorkspaceIO.fs, stat: async () => { throw denied } } },

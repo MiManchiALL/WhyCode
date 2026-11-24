@@ -18,7 +18,7 @@ export async function readImage(path: string, options: ReadImageOptions, ctx: To
   const absolute = await resolveAllowed(ctx, path)
   const io = ctx.workspaceIO ?? localWorkspaceIO
   const bytes = await readBoundedWorkspaceFile(absolute, IMAGE_ATTACHMENT_MAX_SOURCE_BYTES, io, ctx.abortSignal)
-    .catch(error => rethrowTargetError(error, ctx, absolute, '文件'))
+    .catch(error => rethrowTargetError(error, '文件'))
   const attachments = await importImageAttachments(
     [{ kind: 'bytes', name: io.path.basename(absolute), bytes }],
     options.attachmentDirectory,

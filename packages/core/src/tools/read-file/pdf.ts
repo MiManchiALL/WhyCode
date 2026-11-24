@@ -55,7 +55,7 @@ export async function readPdf(
     if (remoteFile) {
       localPath = join(outputDirectory!, 'source.pdf')
       const bytes = await readBoundedWorkspaceFile(source.path, PDF_ATTACHMENT_MAX_SOURCE_BYTES, io, ctx.abortSignal)
-        .catch(error => rethrowTargetError(error, ctx, source.path, '文件'))
+        .catch(error => rethrowTargetError(error, '文件'))
       await writeFile(localPath, bytes, { mode: 0o600, flag: 'wx', signal: ctx.abortSignal })
     }
     const result = await options.processor.readPages(
@@ -76,7 +76,7 @@ export async function readPdf(
           },
       ctx.abortSignal,
     ).catch(error => {
-      if (!remoteFile && !source.attachmentId) rethrowTargetError(error, ctx, source.path, '文件', 'source-not-found')
+      if (!remoteFile && !source.attachmentId) rethrowTargetError(error, '文件', 'source-not-found')
       throw error
     })
     if (!visual) {
