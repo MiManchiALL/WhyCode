@@ -50,6 +50,7 @@ export type PdfProcessingErrorCode =
   | 'empty'
   | 'invalid-page-range'
   | 'password-protected'
+  | 'source-not-found'
   | 'timeout'
   | 'too-large'
   | 'too-many-pages'

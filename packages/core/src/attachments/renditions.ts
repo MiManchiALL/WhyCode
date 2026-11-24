@@ -40,6 +40,7 @@ export interface PreparedImage {
   width: number
   height: number
   optimized: boolean
+  autoOriented: boolean
   detail: ImageDetail
   /** 坐标均基于 autoOrient 后的源图像素。 */
   sourceWidth: number
@@ -80,9 +81,14 @@ export async function prepareImageAttachmentForModel(
   const sourceHeight = orientationSwapsAxes(orientation) ? metadata.width : metadata.height
   if (!sourceWidth || !sourceHeight) throw new Error('无法读取图片解码尺寸')
   const selectedRegion = resolveSelectedRegion(transform.region, sourceWidth, sourceHeight)
+  const withMapping = (image: EncodedImage): PreparedImage => ({
+    ...image, detail: transform.detail, autoOriented: orientation !== 1, sourceWidth, sourceHeight, selectedRegion,
+    modelToSourceScaleX: selectedRegion.width / image.width,
+    modelToSourceScaleY: selectedRegion.height / image.height,
+  })
 
   if (transform.detail === 'original' && !transform.region && orientation === 1) {
-    return withMapping({ ...stored, optimized: false }, transform.detail, sourceWidth, sourceHeight, selectedRegion)
+    return withMapping({ ...stored, optimized: false })
   }
   if (
     transform.detail === 'high'
@@ -92,7 +98,7 @@ export async function prepareImageAttachmentForModel(
     && stored.height <= IMAGE_MODEL_MAX_DIMENSION
     && orientation === 1
   ) {
-    return withMapping({ ...stored, optimized: false }, transform.detail, sourceWidth, sourceHeight, selectedRegion)
+    return withMapping({ ...stored, optimized: false })
   }
 
   const variantDigest = imageSha256(Buffer.from(JSON.stringify({ version: 3, transform })))
@@ -105,7 +111,7 @@ export async function prepareImageAttachmentForModel(
     selectedRegion,
     abortSignal,
   )
-  if (cached) return withMapping(cached, transform.detail, sourceWidth, sourceHeight, selectedRegion)
+  if (cached) return withMapping(cached)
 
   const generated = transform.detail === 'original'
     ? await generateOriginalRendition(
@@ -129,7 +135,7 @@ export async function prepareImageAttachmentForModel(
     generated.bytes,
     variantDigest,
   ).catch(() => {})
-  return withMapping(generated, transform.detail, sourceWidth, sourceHeight, selectedRegion)
+  return withMapping(generated)
 }
 
 /** 丢弃未提交 step 新导入的原图与其衍生图。 */
@@ -348,24 +354,6 @@ function resolveSelectedRegion(
     )
   }
   return selected
-}
-
-function withMapping(
-  image: EncodedImage,
-  detail: ImageDetail,
-  sourceWidth: number,
-  sourceHeight: number,
-  selectedRegion: ImageRegion,
-): PreparedImage {
-  return {
-    ...image,
-    detail,
-    sourceWidth,
-    sourceHeight,
-    selectedRegion,
-    modelToSourceScaleX: selectedRegion.width / image.width,
-    modelToSourceScaleY: selectedRegion.height / image.height,
-  }
 }
 
 async function readImageMetadata(bytes: Buffer, abortSignal?: AbortSignal): Promise<Metadata> {

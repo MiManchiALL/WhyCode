@@ -9,6 +9,9 @@ import type { ToolFileChange } from './file-changes.ts'
 import type { WorkspaceIO } from '../workspace/io.ts'
 import type { SubagentDefinitionSnapshot } from '../subagents/types.ts'
 
+/** 工具已给出可直接用于修正调用的诊断。 */
+export class ToolResultError extends Error {}
+
 /**
  * WhyCode 工具接口。内置工具继续用 Zod；运行时工具可直接使用带验证器的 JSON Schema。
  * fail-closed：未声明的行为标记按最保守处理（buildTool 中填充默认值）。

@@ -1,6 +1,8 @@
 import { on } from 'node:events'
 import { Worker } from 'node:worker_threads'
+import { unicodeSafeSuffix } from '../../text.ts'
 import type { SearchPage, SearchRow } from './page.ts'
+import { ToolResultError } from '../tool.ts'
 
 export interface GrepOptions {
   pattern: string
@@ -56,7 +58,16 @@ export async function matchFallbackBatches(options: GrepOptions, batches: AsyncI
     for await (const files of batches) {
       signal.throwIfAborted()
       worker.postMessage({ files, skip: page.remainingSkip, limit: page.limit + 1 })
-      const reply = await messages.next()
+      const reply = await messages.next().catch(error => {
+        if (error instanceof SyntaxError) {
+          // V8 会把整个表达式插入消息，具体语法错误在末尾。
+          let detail = error.message
+          if (detail.length > 512) detail = detail.replace(options.pattern, '…')
+          if (detail.length > 512) detail = '无效正则：…' + unicodeSafeSuffix(detail, 256)
+          throw new ToolResultError(detail, { cause: error })
+        }
+        throw error
+      })
       if (reply.done) throw new Error('搜索匹配进程提前退出')
       const result: { skipped: number; rows: SearchRow[] } = reply.value[0]
       page.remainingSkip -= result.skipped

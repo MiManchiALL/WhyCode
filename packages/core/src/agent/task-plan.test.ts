@@ -240,16 +240,12 @@ describe('Main 长任务端到端控制', () => {
     assert.ok(tail.includes('这是当前任务计划，仅作进度参考。请结合最新上下文关注任务进展，并在有实际进展时适时更新。'))
     const reminders = reopened.captureMessageSnapshot().filter(isTaskProgressReminder)
     assert.equal(reminders.length, 1)
-    const body = String(reminders[0]!.content).split('\n')[2]!
-    assert.deepEqual(JSON.parse(body), {
-      goal: '验收跨回合功能',
-      items: [
-        { id: 'T1', status: 'completed', outcome: '实现已提交' },
-        { id: 'T2', status: 'pending', outcome: '旧配置可用' },
-        { id: 'T3', status: 'in_progress', outcome: '调用已接通' },
-        { id: 'T4', status: 'pending', outcome: '验收已完成' },
-      ],
-    })
+    assert.deepEqual(String(reminders[0]!.content).split('\n').slice(2, 7), [
+      '当前任务计划「验收跨回合功能」，进度 1/4。',
+      'T1 [completed] 实现已提交', 'T2 [pending] 旧配置可用',
+      'T3 [in_progress] 调用已接通', 'T4 [pending] 验收已完成（整体验证）',
+    ])
+    assert.doesNotMatch(tail, /提交通过检查/)
     await reopened.handleUserMessage('换个问题')
     assert.doesNotMatch(JSON.stringify(nextModel.doStreamCalls[1]?.prompt.at(-1)), /whycode-task-progress/)
     assert.equal(reopened.captureMessageSnapshot().filter(isTaskProgressReminder).length, 1)

@@ -36,7 +36,9 @@ describe('WebFetch Agent 链路', () => {
           assert.ok(!options.tools?.some((tool) => tool.name === 'WebFind'))
           return toolStep()
         }
-        assert.match(JSON.stringify(options.prompt), /目标网页需要登录或拒绝访问/)
+        const result = options.prompt.findLast(message => message.role === 'tool')
+        assert.deepEqual(result?.content[0]?.type === 'tool-result' && result.content[0].output,
+          { type: 'error-text', value: '目标网页需要登录或拒绝访问' })
         return finalStep('这个来源无法直接读取，我会改用其它公开来源。')
       },
     })

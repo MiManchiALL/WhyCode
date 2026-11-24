@@ -3,7 +3,8 @@ import { captureCommandOutput } from '../run-command/output.ts'
 import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { stopWorkspaceProcess, type WorkspaceProcess } from '../../workspace/process.ts'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { unicodeSafePrefix } from '../../text.ts'
+import { compactBackgroundTaskText } from './list.ts'
+import { MAX_RETAINED_TERMINAL_TASKS } from './constants.ts'
 import {
   isCommandTaskActive,
   type BackgroundTaskState,
@@ -19,7 +20,6 @@ import { CommandTaskStorage } from './storage.ts'
 import { powerShellCommandArgs } from '../powershell.ts'
 
 const MAX_RUNNING_COMMANDS = 16
-const MAX_RETAINED_TERMINAL_TASKS = 16
 const DEFAULT_READ_BYTES = 32 * 1024
 const PROCESS_CLOSE_GRACE_MS = 2_000
 const MAX_BACKGROUND_TASK_LABEL_CHARS = 500
@@ -338,8 +338,12 @@ export class CommandSessionManager {
     await this.initialize()
     return [...this.tasks.values()]
       .filter((task) => task.sessionId === sessionId)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .sort(compareBackgroundTasks)
       .map((task) => this.snapshot(task))
+  }
+
+  hasPrunedHistory(sessionId: string): Promise<boolean> {
+    return this.storage.hasPrunedHistory(sessionId)
   }
 
   async backgroundTasks(sessionId: string): Promise<BackgroundTaskState> {
@@ -569,9 +573,10 @@ export class CommandSessionManager {
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     let removedTask = false
     for (const task of terminal.slice(MAX_RETAINED_TERMINAL_TASKS)) {
-      removedTask = true
-      this.tasks.delete(this.key(sessionId, task.id))
       await this.storage.removeTask(task)
+      if (!removedTask) await this.storage.markHistoryPruned(sessionId)
+      this.tasks.delete(this.key(sessionId, task.id))
+      removedTask = true
     }
     return removedTask
   }
@@ -635,10 +640,4 @@ function waitForProcessClose(child: ChildProcessWithoutNullStreams | WorkspacePr
     child.once('close', done)
     child.once('error', done)
   })
-}
-
-function compactBackgroundTaskText(value: string, maxChars: number): string {
-  const normalized = value.replace(/\s+/g, ' ').trim()
-  if (normalized.length <= maxChars) return normalized
-  return `${unicodeSafePrefix(normalized, maxChars - 1)}…`
 }

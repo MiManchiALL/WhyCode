@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { attachmentReferenceId, fileReadKind, isAttachmentReference, parsePageRange } from '../../file-read.ts'
 import { PDF_VISUAL_MAX_PAGES } from '../../pdf/limits.ts'
 import { buildTool } from '../tool.ts'
+import { resolveAllowed, rethrowTargetError } from '../fs-utils.ts'
 import { readImage, type ReadImageOptions } from './image.ts'
 import { readPdf, type ReadPdfOptions } from './pdf.ts'
 import { readText } from './text.ts'
@@ -54,8 +55,10 @@ export function createReadFileTool(options: ReadFileToolOptions = {}) {
         case 'pdf':
           if (!options.pdf) return { data: '当前环境未提供 PDF 读取能力', isError: true }
           return readPdf(input.path, input.pages === undefined ? undefined : parsePageRange(input.pages)!, options.pdf, ctx)
-        case 'text':
-          return readText(input, ctx)
+        case 'text': {
+          const path = await resolveAllowed(ctx, input.path)
+          return readText(path, input, ctx).catch(error => rethrowTargetError(error, ctx, path, '文件'))
+        }
       }
     },
   })

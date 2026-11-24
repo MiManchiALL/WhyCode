@@ -43,7 +43,7 @@ describe('ReadFile 流式读取', () => {
     assert.equal(result.isError, false)
     assert.match(result.data, /2\s+two/)
     assert.match(result.data, /3\s+three/)
-    assert.match(result.data, /从第 4 行继续读取/)
+    assert.equal(result.data.split('\n').at(-1), '[续读 offset=4]')
     assert.doesNotMatch(result.data, /four/)
   })
 

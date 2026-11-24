@@ -6,6 +6,7 @@ import { fileGlob, incompleteScan, walkSearchFiles } from '../search/fallback.ts
 import { runRipgrepLines, SEARCH_EXCLUSIONS } from '../search/ripgrep.ts'
 import { withSearchDeadline } from '../search/deadline.ts'
 import { SearchPage } from '../search/page.ts'
+import { formatGlobPaths } from './format-paths.ts'
 
 export const LIST_DIR_TOOL_NAME = 'ListDir'
 export const GLOB_TOOL_NAME = 'Glob'
@@ -79,13 +80,16 @@ export const globTool = buildTool({
         io,
       )
 
-      if (native) return page.result('（无匹配文件）')
-      const matcher = fileGlob(pattern)
-      const status = { limited: false, unreadable: 0 }
-      for await (const path of walkSearchFiles(root, ctx.abortSignal, io, status)) {
-        if (matcher.match(relative(root, path).replaceAll('\\', '/')) && !add(path)) break
+      let incomplete: string | undefined
+      if (!native) {
+        const matcher = fileGlob(pattern)
+        const status = { limited: false, unreadable: 0 }
+        for await (const path of walkSearchFiles(root, ctx.abortSignal, io, status)) {
+          if (matcher.match(relative(root, path).replaceAll('\\', '/')) && !add(path)) break
+        }
+        incomplete = incompleteScan(status)
       }
-      return page.result('（无匹配文件）', incompleteScan(status))
+      return page.result('（无匹配文件）', incomplete, formatGlobPaths)
     })
   },
 })

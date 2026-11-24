@@ -156,7 +156,7 @@ function isWorkerError(value: unknown): value is { code: PdfProcessingErrorCode;
 }
 
 const PDF_ERROR_CODES: ReadonlySet<string> = new Set([
-  'aborted', 'corrupted', 'empty', 'invalid-page-range', 'password-protected',
+  'aborted', 'corrupted', 'empty', 'invalid-page-range', 'password-protected', 'source-not-found',
   'timeout', 'too-large', 'too-many-pages', 'unavailable', 'unknown',
 ])
 

@@ -1,5 +1,4 @@
 import { buildTool } from '../tool.ts'
-import { MCP_TOOL_SEARCH_NAME } from '../../mcp/search.ts'
 import {
   WEB_FETCH_DEFAULT_RESULTS,
   WebPageError,
@@ -52,10 +51,7 @@ export function createWebFetchTool(reader: WebPageReader) {
         const message = error instanceof WebPageError
           ? error.message
           : `${operation}暂时不可用`
-        return {
-          data: pattern === undefined ? `${message}\n若已配置对应的 MCP 服务，可尝试 ${MCP_TOOL_SEARCH_NAME}。` : message,
-          isError: true,
-        }
+        return { data: message, isError: true }
       }
     },
   })

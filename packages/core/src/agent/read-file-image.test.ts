@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
+import sharp from 'sharp'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
@@ -18,6 +19,25 @@ const ONE_PIXEL_PNG = Buffer.from(
 )
 
 describe('ReadFile 图片 Agent 链路', () => {
+  it('EXIF 转正和缩放后的坐标可换算回转正后的原图', async () => {
+    await withTempDirectory(async (directory) => {
+      const tool = createReadFileTool({ image: {
+        attachmentDirectory: join(directory, 'attachments'), sessionId: '11111111-1111-4111-8111-111111111111',
+      } })
+      const ctx = { projectDir: directory, additionalDirs: [], abortSignal: new AbortController().signal }
+      for (const [width, expected] of [
+        [128, '转正后的原图尺寸 64×128'],
+        [4096, '转正后的原图 64×4096，显示为 32×2048。坐标乘 2 可换算为转正后的原图坐标。'],
+      ] as const) {
+        await sharp({ create: { width, height: 64, channels: 3, background: 'white' } })
+          .jpeg().withMetadata({ orientation: 6 }).toFile(join(directory, 'rotated.jpg'))
+        const result = await tool.execute({ path: 'rotated.jpg' }, ctx)
+        assert.equal(result.data, expected)
+        assert.equal(result.attachments?.length, 1)
+      }
+    })
+  })
+
   it('统一 schema 不暴露 detail 或 region', () => {
     const tool = createReadFileTool({ image: {
       attachmentDirectory: process.cwd(), sessionId: '11111111-1111-4111-8111-111111111111',
@@ -51,6 +71,11 @@ describe('ReadFile 图片 Agent 链路', () => {
             ? toolMessage.content.find((part) => part.type === 'tool-result')
             : undefined
           assert.equal(result?.type === 'tool-result' ? result.output.type : '', 'content')
+          if (result?.type === 'tool-result' && result.output.type === 'content') {
+            const texts = result.output.value.flatMap(part => part.type === 'text' ? [part.text] : [])
+            assert.ok(texts.some(text => text.includes('图片尺寸 1×1')))
+            assert.doesNotMatch(texts.join('\n'), /模型像素|无需生成衍生图|image\/png/)
+          }
           assert.equal(
             options.prompt.some((message) =>
               message.role === 'user'

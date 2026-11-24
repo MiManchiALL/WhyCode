@@ -20,6 +20,52 @@ import { createWebFetchTool, WebPageError } from '../tools/web-page/index.ts'
 import { AgentSession } from './session.ts'
 
 describe('BTW 独立侧对话', () => {
+  it('Main 与 BTW 续轮只收到参数诊断，批内成功结果仍与原调用配对', async () => {
+    const invalid = [
+      { toolName: 'ReadFile', input: { path: 'a.txt', offset: 0 } },
+      { toolName: 'Grep', input: { pattern: 'x', limit: 0 } },
+      { toolName: 'Glob', input: { pattern: '*.ts', limit: 1_001 } },
+      { toolName: 'EditFile', input: { edits: [{ path: 'a.txt', oldText: 'x'.repeat(1_000),
+        newText: 'y'.repeat(1_000), replaceAll: 'yes' }] } },
+      { toolName: 'ListDir', input: { path: '.', limit: 1 } },
+      { toolName: 'ListDir', toolCallId: 'bad-json', input: '{!' },
+    ]
+    for (const mode of ['main', 'btw']) {
+      const model = new MockLanguageModelV4({ doStream: [parallelToolStep(invalid), finalStep('已核实。')] })
+      const session = createSession(model)
+      const outcome = mode === 'main' ? await session.handleUserMessage('检查参数')
+        : await session.handleBtwMessage(btwContext('btw', '检查参数', []), lifecycle([]))
+      assert.equal(outcome, 'completed')
+      const results = model.doStreamCalls[1]!.prompt.flatMap(m => m.role === 'tool' ? m.content : [])
+      const outputs = new Map(results.flatMap(p => p.type === 'tool-result' ? [[p.toolCallId, p.output] as const] : []))
+      for (const [tool, reason] of [
+        ['ReadFile', 'offset 至少为 1，收到 0。'], ['Grep', 'limit 至少为 1，收到 0。'],
+        ['Glob', 'limit 最大为 1000，收到 1001。'], ['EditFile', 'edits[0].replaceAll 应为布尔值，收到字符串。'],
+      ]) {
+        assert.deepEqual(outputs.get('btw-' + tool), { type: 'error-text', value: reason })
+      }
+      assert.equal(outputs.get('btw-ListDir')?.type, 'text')
+      assert.deepEqual(outputs.get('bad-json'), { type: 'error-text', value: '工具参数必须是有效的 JSON。' })
+    }
+  })
+
+  it('下一轮接收可修正的文件及搜索错误', async () => {
+    const model = new MockLanguageModelV4({ doStream: [parallelToolStep([
+      { toolName: 'ReadFile', input: { path: 'missing/a.txt' } },
+      { toolName: 'Grep', input: { pattern: 'a', path: 'missing/subdir' } },
+      { toolName: 'Grep', toolCallId: 'bad-pattern', input: { pattern: '[', path: 'package.json' } },
+    ]), finalStep('已收到。')] })
+    assert.equal(await createSession(model).handleUserMessage('读取和搜索'), 'completed')
+    const results = model.doStreamCalls[1]!.prompt.flatMap(m => m.role === 'tool' ? m.content : [])
+    const outputs = new Map(results.flatMap(p => p.type === 'tool-result' ? [[p.toolCallId, p.output] as const] : []))
+    assert.deepEqual(outputs.get('btw-ReadFile'), { type: 'error-text', value: '文件不存在：missing/a.txt' })
+    assert.deepEqual(outputs.get('btw-Grep'), { type: 'error-text', value: '搜索路径不存在：missing/subdir' })
+    const pattern = outputs.get('bad-pattern')
+    assert.ok(pattern?.type === 'error-text')
+    assert.match(pattern.value, /unclosed|unterminated/i)
+    assert.doesNotMatch(pattern.value, /工具执行出错|ripgrep 执行失败/)
+  })
+
   it('Main、BTW 与续问共享 System、完整工具和 Skill 目录前缀，侧结果不进入 Main', async (t) => {
     const home = await mkdtemp(join(tmpdir(), 'whycode-btw-skills-'))
     t.after(() => rm(home, { recursive: true, force: true }))
@@ -390,14 +436,14 @@ function toolStep(toolName: string, input: Record<string, unknown>) {
   return parallelToolStep([{ toolName, input }])
 }
 
-function parallelToolStep(calls: { toolName: string; input: Record<string, unknown> }[]) {
+function parallelToolStep(calls: { toolName: string; input: Record<string, unknown> | string; toolCallId?: string }[]) {
   return {
     stream: simulateReadableStream({
       chunks: [
-        ...calls.map(({ toolName, input }) => ({
+        ...calls.map(({ toolName, toolCallId, input }) => ({
           type: 'tool-call' as const,
-          toolCallId: `btw-${toolName}`, toolName,
-          input: JSON.stringify(input),
+          toolCallId: toolCallId ?? `btw-${toolName}`, toolName,
+          input: typeof input === 'string' ? input : JSON.stringify(input),
         })),
         {
           type: 'finish' as const,

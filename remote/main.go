@@ -72,6 +72,9 @@ func main() {
 	if len(os.Args) > 1 {
 		if os.Args[1] == "read-text" {
 			if err := readTextWindow(os.Args[2:], os.Stdout); err != nil {
+				if os.IsNotExist(err) {
+					os.Exit(3)
+				}
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}

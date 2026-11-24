@@ -97,7 +97,7 @@ describe('网页读取工具契约', () => {
     assert.equal((await tool.execute({ url }, toolContext)).isError, false)
     lines.push('尾')
     assert.deepEqual(await tool.execute({ url }, toolContext), {
-      data: '网页读取后端返回了无效结果\n若已配置对应的 MCP 服务，可尝试 ToolSearch。',
+      data: '网页读取后端返回了无效结果',
       isError: true,
     })
     lines = Array<string>(101).fill('短行')
@@ -201,11 +201,11 @@ describe('网页读取工具契约', () => {
     const input = { url: 'https://example.com/', offset: 1, limit: 10 }
 
     assert.deepEqual(await safe.execute(input, toolContext), {
-      data: '目标网页不存在（HTTP 404）\n若已配置对应的 MCP 服务，可尝试 ToolSearch。',
+      data: '目标网页不存在（HTTP 404）',
       isError: true,
     })
     assert.deepEqual(await unsafe.execute(input, toolContext), {
-      data: '网页读取暂时不可用\n若已配置对应的 MCP 服务，可尝试 ToolSearch。',
+      data: '网页读取暂时不可用',
       isError: true,
     })
     const controller = new AbortController()

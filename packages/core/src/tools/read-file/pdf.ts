@@ -15,7 +15,7 @@ import {
 import type { PdfProcessor } from '../../pdf/processor.ts'
 import { formatPdfTextResult, formatPdfVisualResult } from '../../pdf/content.ts'
 import type { ToolContext, ToolResult } from '../tool.ts'
-import { resolveAllowed } from '../fs-utils.ts'
+import { resolveAllowed, rethrowTargetError } from '../fs-utils.ts'
 import { attachmentReferenceId, isAttachmentReference } from '../../file-read.ts'
 import { localWorkspaceIO } from '../../workspace/io.ts'
 import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
@@ -55,6 +55,7 @@ export async function readPdf(
     if (remoteFile) {
       localPath = join(outputDirectory!, 'source.pdf')
       const bytes = await readBoundedWorkspaceFile(source.path, PDF_ATTACHMENT_MAX_SOURCE_BYTES, io, ctx.abortSignal)
+        .catch(error => rethrowTargetError(error, ctx, source.path, '文件'))
       await writeFile(localPath, bytes, { mode: 0o600, flag: 'wx', signal: ctx.abortSignal })
     }
     const result = await options.processor.readPages(
@@ -74,7 +75,10 @@ export async function readPdf(
             ...(source.expectedSha256 ? { expectedSha256: source.expectedSha256 } : {}),
           },
       ctx.abortSignal,
-    )
+    ).catch(error => {
+      if (!remoteFile && !source.attachmentId) rethrowTargetError(error, ctx, source.path, '文件', 'source-not-found')
+      throw error
+    })
     if (!visual) {
       if (result.mode !== 'text') throw new Error('PDF 文字处理返回了错误结果类型')
       return {

@@ -42,7 +42,9 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   const injection = await grepTool.execute({ pattern: '$(touch injected)', literal: true }, searchCtx)
   assert.equal(injection.data, '（无匹配）')
   await assert.rejects(access(join(env.root, 'project/injected')), { code: 'ENOENT' })
-  await assert.rejects(grepTool.execute({ pattern: '[' }, searchCtx), /ripgrep 执行失败/)
+  await assert.rejects(grepTool.execute({ pattern: '[' }, searchCtx), /unclosed character class/)
+  await assert.rejects(grepTool.execute({ pattern: 'needle', path: 'missing/subdir' }, searchCtx),
+    { message: '搜索路径不存在：missing/subdir' })
   const first = await globTool.execute({ pattern: '*.txt', limit: 1 }, searchCtx)
   assert.match(first.data, /offset=1/)
   const next = await globTool.execute({ pattern: '*.txt', limit: 1, offset: 1 }, searchCtx)
