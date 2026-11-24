@@ -36,6 +36,17 @@ async function fixture(): Promise<{ root: string; ctx: ToolContext }> {
 
 describe('高性能搜索工具', () => {
   for (const fallback of [false, true]) {
+    it(`${fallback ? '回退' : '原生'} Glob 区分根目录缺失、路径是文件和没有匹配项`, async () => {
+      const { ctx } = await fixture()
+      if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
+      await assert.rejects(globTool.execute({ path: 'missing/subdir', pattern: '*.ts' }, ctx),
+        { message: '搜索路径不存在' })
+      assert.deepEqual(await globTool.execute({ path: 'src/alpha.ts', pattern: '*.ts' }, ctx),
+        { data: '搜索路径应为目录', isError: true })
+      assert.deepEqual(await globTool.execute({ path: 'src', pattern: 'missing.ts' }, ctx),
+        { data: '（无匹配文件）', isError: false })
+    })
+
     it(`${fallback ? '回退' : '原生'} Glob 在每页独立折叠目录，标题不占文件名额`, async () => {
       const { root, ctx } = await fixture()
       if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
@@ -147,12 +158,14 @@ describe('高性能搜索工具', () => {
     await assert.rejects(grepTool.execute({ path: target, pattern: 'x' }, { ...ctx, additionalDirs: [external.root] }),
       { message: '搜索路径不存在' })
     const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' })
-    await assert.rejects(grepTool.execute({ pattern: 'x' }, {
-      ...ctx, workspaceIO: { ...localWorkspaceIO, fs: { ...localWorkspaceIO.fs, stat: async () => { throw denied } } },
-    }), error => error === denied)
-    await assert.rejects(grepTool.execute({ pattern: 'x' }, {
-      ...ctx, workspaceIO: { ...localWorkspaceIO, ripgrepPath: join(root, 'missing-ripgrep') },
-    }), { code: 'ENOENT' })
+    for (const tool of [grepTool, globTool]) {
+      await assert.rejects(tool.execute({ pattern: 'x' }, {
+        ...ctx, workspaceIO: { ...localWorkspaceIO, fs: { ...localWorkspaceIO.fs, stat: async () => { throw denied } } },
+      }), error => error === denied)
+      await assert.rejects(tool.execute({ pattern: 'x' }, {
+        ...ctx, workspaceIO: { ...localWorkspaceIO, ripgrepPath: join(root, 'missing-ripgrep') },
+      }), { code: 'ENOENT' })
+    }
   })
 
   it('Grep 支持内容、上下文、大小写、文件列表与计数模式', async () => {

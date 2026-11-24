@@ -53,6 +53,7 @@ describe('BTW 独立侧对话', () => {
     const model = new MockLanguageModelV4({ doStream: [parallelToolStep([
       { toolName: 'ReadFile', input: { path: 'missing/a.txt' } },
       { toolName: 'Grep', input: { pattern: 'a', path: 'missing/subdir' } },
+      { toolName: 'Glob', input: { pattern: '*.ts', path: 'missing/subdir' } },
       { toolName: 'Grep', toolCallId: 'bad-pattern', input: { pattern: '[', path: 'package.json' } },
     ]), finalStep('已收到。')] })
     assert.equal(await createSession(model).handleUserMessage('读取和搜索'), 'completed')
@@ -60,6 +61,7 @@ describe('BTW 独立侧对话', () => {
     const outputs = new Map(results.flatMap(p => p.type === 'tool-result' ? [[p.toolCallId, p.output] as const] : []))
     assert.deepEqual(outputs.get('btw-ReadFile'), { type: 'error-text', value: '文件不存在' })
     assert.deepEqual(outputs.get('btw-Grep'), { type: 'error-text', value: '搜索路径不存在' })
+    assert.deepEqual(outputs.get('btw-Glob'), { type: 'error-text', value: '搜索路径不存在' })
     const pattern = outputs.get('bad-pattern')
     assert.ok(pattern?.type === 'error-text')
     assert.match(pattern.value, /unclosed|unterminated/i)
