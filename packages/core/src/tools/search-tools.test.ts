@@ -36,6 +36,25 @@ async function fixture(): Promise<{ root: string; ctx: ToolContext }> {
 
 describe('高性能搜索工具', () => {
   for (const fallback of [false, true]) {
+    it(`${fallback ? '回退' : '原生'} Glob 在每页独立折叠目录，标题不占文件名额`, async () => {
+      const { root, ctx } = await fixture()
+      if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
+      const base = 'packages/example/source'
+      await mkdir(join(root, base, 'nested'), { recursive: true })
+      for (const name of ['a', 'b', 'nested/c', 'nested/d', 'y', 'z']) {
+        await writeFile(join(root, base, name + '.ts'), '')
+      }
+      const next = await globTool.execute({ path: base, pattern: '*.ts', limit: 5 }, ctx)
+      assert.equal(next.data, [
+        '# ' + base + '/', 'a.ts', 'b.ts', '## nested/', 'c.ts', 'd.ts',
+        '# ' + base + '/', 'y.ts', '[用 offset=5 继续]',
+      ].join('\n'))
+      assert.equal((await globTool.execute({ path: base, pattern: '*.ts', offset: 5 }, ctx)).data, base + '/z.ts')
+      const middle = await globTool.execute({ path: base, pattern: '*.ts', offset: 2, limit: 3 }, ctx)
+      assert.equal(middle.data, ['# ' + base + '/', '## nested/', 'c.ts', 'd.ts',
+        '# ' + base + '/', 'y.ts', '[用 offset=5 继续]'].join('\n'))
+    })
+
     it(`${fallback ? '回退' : '原生'}搜索中 include 与各级 ignore 取交集，明确指定文件仍可读`, async () => {
       const { ctx, root } = await fixture()
       if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
@@ -119,6 +138,21 @@ describe('高性能搜索工具', () => {
       ctx,
     )
     assert.match(second.data, /\.tsx?/) 
+  })
+
+  it('只将指定搜索路径的缺失归为找不到文件，保留权限与可执行文件故障', async () => {
+    const { ctx, root } = await fixture()
+    const external = await fixture()
+    const target = join(external.root, 'missing')
+    await assert.rejects(grepTool.execute({ path: target, pattern: 'x' }, { ...ctx, additionalDirs: [external.root] }),
+      { message: '搜索路径不存在：' + target.replaceAll('\\', '/') })
+    const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    await assert.rejects(grepTool.execute({ pattern: 'x' }, {
+      ...ctx, workspaceIO: { ...localWorkspaceIO, fs: { ...localWorkspaceIO.fs, stat: async () => { throw denied } } },
+    }), error => error === denied)
+    await assert.rejects(grepTool.execute({ pattern: 'x' }, {
+      ...ctx, workspaceIO: { ...localWorkspaceIO, ripgrepPath: join(root, 'missing-ripgrep') },
+    }), { code: 'ENOENT' })
   })
 
   it('Grep 支持内容、上下文、大小写、文件列表与计数模式', async () => {

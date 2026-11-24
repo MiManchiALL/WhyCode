@@ -1,4 +1,5 @@
 import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
+import { compactToolInputErrors, formatToolInputError } from './tool-input-errors.ts'
 import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
 import { randomUUID } from 'node:crypto'
 import { modelMessageText } from '../text.ts'
@@ -14,6 +15,7 @@ import { providerOptionsWithReasoningEffort } from '../providers/reasoning-effor
 import {
   validateToolInput,
   toolBehavior,
+  ToolResultError,
   type ToolContext,
   type ToolDefinition,
 } from '../tools/tool.ts'
@@ -910,7 +912,7 @@ export class AgentSession {
       if (stepAbort.signal.aborted) throw new Error('BTW 已中止')
       const response = await stream.response
       const normalized = normalizeResponseMessagesForProvider(
-        response.messages,
+        compactToolInputErrors(response.messages, await stream.toolCalls),
         this.currentModelSelection().model.protocol,
       )
       const sanitized = sanitizeAssistantControlOutput(normalized)
@@ -2579,7 +2581,7 @@ export class AgentSession {
       const response = await result.response
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       const normalizedResponseMessages = normalizeResponseMessagesForProvider(
-        response.messages,
+        compactToolInputErrors(response.messages, await result.toolCalls),
         this.currentModelSelection().model.protocol,
       )
       const sanitizedResponse = sanitizeAssistantControlOutput(normalizedResponseMessages)
@@ -2827,7 +2829,7 @@ export class AgentSession {
         }
         const parsed = await validateToolInput(def, input)
         if (!parsed.success) {
-          const msg = `参数校验失败：${parsed.error.message}`
+          const msg = formatToolInputError(parsed.error, input)
           loopHealth.record(def.name, input, msg, true)
           return { isReadOnly: false, execute: () => finishTool(toolCallId, msg, true) }
         }
@@ -3005,7 +3007,8 @@ export class AgentSession {
             return finishTool(toolCallId, result.data, result.isError, result.fileChanges ? [...result.fileChanges] : undefined)
           } catch (error) {
             await finalizeCheckpoint()
-            const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
+            const msg = error instanceof ToolResultError ? error.message
+              : `工具执行出错：${error instanceof Error ? error.message : String(error)}`
             if (def.name === SKILL_TOOL_NAME) {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, false)
             }

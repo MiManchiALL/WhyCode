@@ -34,8 +34,8 @@ export class SearchPage {
     return true
   }
 
-  result(empty: string, incomplete?: string) {
-    const lines: string[] = []
+  result(empty: string, incomplete?: string, formatPaths?: (paths: string[]) => string[]) {
+    let lines: string[] = []
     for (const [i, row] of this.rows.entries()) {
       if (typeof row === 'string') { lines.push(row); continue }
       const previous = this.rows[i - 1]
@@ -44,6 +44,7 @@ export class SearchPage {
       else if (typeof next === 'object' && next.path === row.path) lines.push(row.path, row.line)
       else lines.push(`${row.path}:${row.line}`)
     }
+    if (formatPaths) lines = formatPaths(lines)
     if (!lines.length && !incomplete) lines.push(this.offset ? '（已到结果末尾）' : empty)
     if (this.more) lines.push(`[用 offset=${this.offset + this.rows.length} 继续]`)
     if (incomplete) lines.push(`[${incomplete}]`)

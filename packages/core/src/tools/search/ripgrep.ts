@@ -5,6 +5,7 @@ import { access } from 'node:fs/promises'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { IGNORED_DIRS } from '../fs-utils.ts'
+import { ToolResultError } from '../tool.ts'
 
 const MAX_STDERR_CHARS = 4_000
 const MAX_LINE_CHARS = 64 * 1024
@@ -131,7 +132,7 @@ export async function runRipgrepLines(
       if (signal.aborted) return finish(signal.reason)
       if (limitReached || code === 0 || code === 1) return finish()
       const detail = stderr.trim().slice(-MAX_STDERR_CHARS)
-      finish(new Error(`ripgrep 执行失败（退出码 ${code ?? 'unknown'}）${detail ? `：${detail}` : ''}`))
+      finish(new ToolResultError(detail || `ripgrep 执行失败（退出码 ${code ?? '未知'}）`))
     })
     child.stdin?.end()
     if (signal.aborted) onAbort()

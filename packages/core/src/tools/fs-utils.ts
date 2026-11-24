@@ -1,5 +1,5 @@
 import { localWorkspaceIO, outsideWorkspaceBoundary, type WorkspaceIO } from '../workspace/io.ts'
-import type { ToolContext } from './tool.ts'
+import { ToolResultError, type ToolContext } from './tool.ts'
 
 /**
  * 工具侧的路径解析：限制在项目目录 + 会话 scratch + 已授权目录内。
@@ -18,10 +18,20 @@ export function displayToolPath(projectDir: string, root: string, path: string, 
   const { resolve, relative, isAbsolute } = io.path
   const absolute = resolve(root, path.replace(/^\.\//, ''))
   const projectRelative = relative(projectDir, absolute)
-  if (projectRelative && !projectRelative.startsWith('..') && !isAbsolute(projectRelative)) {
-    return projectRelative.replaceAll('\\', '/')
+  if (projectRelative !== '..' && !projectRelative.startsWith('..' + io.path.sep) && !isAbsolute(projectRelative)) {
+    return projectRelative.replaceAll('\\', '/') || '.'
   }
-  return projectRelative ? absolute.replaceAll('\\', '/') : '.'
+  return absolute.replaceAll('\\', '/')
+}
+
+/** 只转换读取目标本身的缺失错误，宿主资源与子进程错误沿用各自的诊断。 */
+export function rethrowTargetError(error: unknown, ctx: ToolContext, path: string, label: '文件' | '搜索路径',
+  missingCode = 'ENOENT'): never {
+  if (error instanceof Error && 'code' in error && error.code === missingCode) {
+    const display = displayToolPath(ctx.projectDir, ctx.projectDir, path, ctx.workspaceIO)
+    throw new ToolResultError(`${label}不存在：${display}`, { cause: error })
+  }
+  throw error
 }
 
 /** 目录遍历时跳过的项（避免扫进依赖和版本库） */

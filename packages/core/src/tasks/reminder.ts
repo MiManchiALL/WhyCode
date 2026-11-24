@@ -2,7 +2,7 @@ import type { ModelMessage } from 'ai'
 import { userTurn } from '../context/user-turn.ts'
 import { isCompactApplicationContextMessage } from '../prompts/compact.ts'
 import type { ActiveTaskPlan } from './types.ts'
-import { taskItemNumber } from './context.ts'
+import { taskPlanSummary } from './context.ts'
 import { TASK_PLAN_TOOL_NAME } from './tools.ts'
 
 const REMINDER_STEPS = 10
@@ -34,8 +34,7 @@ export function taskProgressReminder(messages: readonly ModelMessage[], plan: Ac
     role: 'user',
     content: [
       '<system-reminder>', PROGRESS_OPEN,
-      JSON.stringify({ goal: plan.goal, items: plan.items.map(({ status, outcome }, index) =>
-        ({ id: taskItemNumber(index), status, outcome })) }),
+      taskPlanSummary(plan, '当前任务计划'),
       '</whycode-task-progress>',
       '这是当前任务计划，仅作进度参考。请结合最新上下文关注任务进展，并在有实际进展时适时更新。',
       '</system-reminder>',

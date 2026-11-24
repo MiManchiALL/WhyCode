@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { localWorkspaceIO } from '../../workspace/io.ts'
 import { buildTool } from '../tool.ts'
-import { displayToolPath, resolveAllowed } from '../fs-utils.ts'
+import { displayToolPath, resolveAllowed, rethrowTargetError } from '../fs-utils.ts'
 import { fallbackGrep } from '../search/fallback-grep.ts'
 import { fileGlob } from '../search/fallback.ts'
 import { runRipgrepLines, SEARCH_EXCLUSIONS } from '../search/ripgrep.ts'
@@ -37,7 +37,7 @@ export const grepTool = buildTool({
       const io = ctx.workspaceIO ?? localWorkspaceIO
       const path = await resolveAllowed(ctx, input.path ?? '.')
       ctx.abortSignal.throwIfAborted()
-      const stats = await io.fs.stat(path)
+      const stats = await io.fs.stat(path).catch(error => rethrowTargetError(error, ctx, path, '搜索路径'))
       ctx.abortSignal.throwIfAborted()
       if (!stats.isDirectory() && !stats.isFile()) {
         return { data: `搜索失败：${input.path ?? '.'} 不是普通文件或目录`, isError: true }

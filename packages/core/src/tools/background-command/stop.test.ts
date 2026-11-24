@@ -105,10 +105,12 @@ for (const scenario of stopCases) {
       const manage = createCommandTools(current, SESSION).manageCommand
       const list = await manage.execute({ action: 'list' }, ctx)
       const output = await manage.execute({ action: 'read', taskId: started.id }, ctx)
-      for (const result of [list, output]) {
-        assert.ok(result.data.includes(scenario.detail))
-        assert.doesNotMatch(result.data, /用户已停止/)
-      }
+      assert.ok(output.data.includes(scenario.detail))
+      if (scenario.reason === 'exit') {
+        assert.match(list.data, /  exit=17  /)
+        assert.doesNotMatch(list.data, /退出码 17/)
+      } else assert.ok(list.data.includes(scenario.detail))
+      assert.doesNotMatch(list.data + output.data, /用户已停止/)
       const state = await current.backgroundTasks(SESSION)
       assert.equal(state.tasks[0]?.detail, scenario.detail)
       assert.equal(state.tasks[0]?.status, terminal.status)

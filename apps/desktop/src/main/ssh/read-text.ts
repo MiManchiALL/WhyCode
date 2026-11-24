@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import type { WorkspaceIO } from '@whycode/core'
-import { posix } from 'node:path'
 import type { RemoteProcessHost } from './process.ts'
 
 const rangeNotice = z.union([
@@ -11,7 +10,8 @@ const rangeNotice = z.union([
 export function remoteTextReader(host: RemoteProcessHost, executable: string): NonNullable<WorkspaceIO['readTextWindow']> {
   return async (path, { offset, column, limit, maxBytes }, signal) => {
     signal.throwIfAborted()
-    const process = host.spawn({ executable, args: ['read-text', path, String(offset), String(column), String(limit ?? 0), String(maxBytes)] }, posix.dirname(path))
+    // path 为绝对路径，父目录缺失也应由已启动的读取器报告。
+    const process = host.spawn({ executable, args: ['read-text', path, String(offset), String(column), String(limit ?? 0), String(maxBytes)] }, '/')
     const reply = await new Promise<string>((resolve, reject) => {
       const chunks: Buffer[] = []
       let bytes = 0, diagnostic = ''
@@ -31,7 +31,9 @@ export function remoteTextReader(host: RemoteProcessHost, executable: string): N
       process.once('close', code => {
         signal.removeEventListener('abort', cancel)
         if (signal.aborted) reject(signal.reason)
-        else if (failure || code !== 0) reject(failure ?? new Error(diagnostic.trim() || '远端文本读取失败'))
+        else if (failure) reject(failure)
+        else if (code === 3) reject(Object.assign(new Error('远端文件不存在'), { code: 'ENOENT', path }))
+        else if (code !== 0) reject(new Error(diagnostic.trim() || '远端文本读取失败'))
         else resolve(Buffer.concat(chunks, bytes).toString('utf8'))
       })
       process.stdin.end()

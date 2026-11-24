@@ -10,6 +10,7 @@ import { isCommandTaskActive, type CommandOutputChunk, type CommandTaskSnapshot 
 import { MANAGE_COMMAND_TOOL_NAME } from './constants.ts'
 import { manageCommandInputSchema } from './input.ts'
 import { MANAGE_COMMAND_PROMPT } from './prompt.ts'
+import { formatCommandList } from './list.ts'
 
 function taskSummary(task: CommandTaskSnapshot): string {
   const command = task.command.length > 1_000
@@ -117,8 +118,7 @@ export function createCommandTools(
       if (input.action === 'list') {
         const tasks = await manager.list(sessionId)
         return {
-          data: tasks.length === 0 ? '当前会话没有后台命令。'
-            : tasks.map((task, index) => `#${index + 1}\n${taskSummary(task)}`).join('\n\n'),
+          data: formatCommandList(tasks, await manager.hasPrunedHistory(sessionId), ctx),
           isError: false,
         }
       }

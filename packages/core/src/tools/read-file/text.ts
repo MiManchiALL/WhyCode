@@ -2,7 +2,6 @@ import { Readable } from 'node:stream'
 import { estimateTextTokens } from '../../context/tokens.ts'
 import { unicodeSafePrefix } from '../../text.ts'
 import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
-import { resolveAllowed } from '../fs-utils.ts'
 import type { ToolContext, ToolResult } from '../tool.ts'
 import { lineParts } from './lines.ts'
 
@@ -27,11 +26,11 @@ async function isBinaryFile(path: string, io: WorkspaceIO): Promise<boolean> {
 }
 
 export async function readText(
+  absolute: string,
   input: { path: string } & Partial<TextRange>,
   ctx: ToolContext,
 ): Promise<ToolResult> {
   const io = ctx.workspaceIO ?? localWorkspaceIO
-  const absolute = await resolveAllowed(ctx, input.path)
   const unreadable = (reason: 'not-file' | 'binary'): ToolResult => ({
     data: reason === 'binary' ? `无法按文本读取二进制文件：${input.path}` : '路径不是文件，请使用 ListDir 查看目录', isError: true,
   })
@@ -120,7 +119,7 @@ function formatPage(body: string, lineEnds: number[], range: TextRange, nextLine
   const labelEnd = body.indexOf('\t') + 1
   const content = body.slice(labelEnd, lineEnds[0])
   const label = body.slice(0, labelEnd)
-  const notice = (next: number) => `\n[第 ${line} 行仅显示片段，请用 offset=${line}, column=${next}${limitHint(limit)} 继续读取]`
+  const notice = (next: number) => `\n[本行未完，续读 offset=${line}, column=${next}${limitHint(limit)}]`
   // 用 UTF-16 长度预留列号位数，且至少留下一个字符供续读游标定位。
   const trailer = notice(column + content.length)
   const length = largestFit(content.length - 1, n => fits(label + content.slice(0, n) + trailer))
@@ -131,7 +130,7 @@ function formatPage(body: string, lineEnds: number[], range: TextRange, nextLine
 }
 
 function lineNotice(next: number, remaining = Infinity): string {
-  return `\n[后续还有内容，请从第 ${next} 行继续读取（offset=${next}${limitHint(remaining)}）]`
+  return `\n[续读 offset=${next}${limitHint(remaining)}]`
 }
 
 function limitHint(limit: number): string {

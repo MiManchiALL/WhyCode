@@ -6,6 +6,7 @@ import { describe, it } from 'node:test'
 import { createCommandTools, MANAGE_COMMAND_TOOL_NAME } from './index.ts'
 import { RUN_COMMAND_TOOL_NAME } from '../run-command/index.ts'
 import { CommandSessionManager } from './manager.ts'
+import { CommandTaskStorage } from './storage.ts'
 import { isCommandTaskActive } from './types.ts'
 import type {
   BackgroundTaskState,
@@ -395,7 +396,58 @@ describe('后台命令会话', () => {
     }
   })
 
-  it('运行任务按最早启动置顶，终态按最新结束下沉', async () => {
+  it('列表只在实际清理终态记录后提示，重启及删除会话沿用该事实', async t => {
+    const fixture = await createFixture('process.exit(0)')
+    const manager = new CommandSessionManager(fixture.storage)
+    t.after(async () => {
+      await manager.shutdown()
+      await rm(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    })
+    const sessionDir = join(fixture.storage, SESSION_A)
+    await mkdir(sessionDir, { recursive: true })
+    const store = new CommandTaskStorage(fixture.storage)
+    const ids: string[] = []
+    for (let n = 0; n < 16; n++) {
+      const id = crypto.randomUUID()
+      ids.push(id)
+      const time = new Date(n * 1_000).toISOString()
+      await store.persist({ id, sessionId: SESSION_A, schemaVersion: 1, startedAt: time, endedAt: time,
+        status: 'failed', exitCode: n === 14 ? null : 1, command: n === 13 ? 'long\n' + 'x'.repeat(300) : 'pnpm test',
+        failureReason: n === 15 ? '退出码 1；输出日志不完整：磁盘已满' : n === 14 ? 'SSH 断开' : '退出码 1',
+        cwd: fixture.cwd, outputBytes: 0 })
+      await writeFile(join(sessionDir, id + '.log'), '')
+    }
+    const list = async (current: CommandSessionManager, sessionId = SESSION_A) => {
+      const result = await createCommandTools(current, sessionId).manageCommand.execute({ action: 'list' },
+        { projectDir: fixture.cwd, additionalDirs: [], abortSignal: new AbortController().signal })
+      assert.equal(result.isError, false)
+      return result.data.split('\n')
+    }
+    const before = await list(manager)
+    assert.equal(before.length, 16)
+    assert.equal(before[0], `${ids[15]}  failed  exit=1  pnpm test  — 输出日志不完整：磁盘已满`)
+    assert.equal(before[1], `${ids[14]}  failed  pnpm test  — SSH 断开`)
+    assert.match(before[2]!, /  failed  exit=1  long x+…$/u)
+    assert.equal(before.at(-1), `${ids[0]}  failed  exit=1  pnpm test`)
+
+    const latest = await manager.start({ sessionId: SESSION_A, cwd: fixture.cwd, command: fixture.command })
+    await waitForTerminal(manager, latest.id)
+    await manager.shutdown()
+    const after = await list(manager)
+    assert.equal(after.length, 17)
+    assert.ok(after[0]!.startsWith(latest.id + '  completed  exit=0  '))
+    assert.equal(after.at(-1), '[更早的已结束命令已清理，每个会话最多保留 16 条。]')
+    assert.deepEqual(after.slice(1, -1), before.slice(0, -1))
+    assert.ok(!(await readdir(sessionDir)).some(name => name.startsWith(ids[0]!)))
+
+    const reopened = new CommandSessionManager(fixture.storage)
+    assert.deepEqual(await list(reopened), after)
+    assert.deepEqual(await list(reopened, SESSION_B), ['当前会话没有后台命令。'])
+    await reopened.removeSession(SESSION_A)
+    assert.equal(await reopened.hasPrunedHistory(SESSION_A), false)
+  })
+
+  it('运行任务按最早启动置顶，终态按最新结束下沉，同名命令标出不同目录', async t => {
     const fixture = await createFixture(`process.stdin.resume()`)
     const manager = new CommandSessionManager(fixture.storage)
     try {
@@ -408,7 +460,7 @@ describe('后台命令会话', () => {
       const second = await manager.start({
         sessionId: SESSION_A,
         command: fixture.command,
-        cwd: fixture.cwd,
+        cwd: fixture.root,
       })
       await manager.armTerminalNotification(SESSION_A, second.id)
       assert.deepEqual(
@@ -418,6 +470,16 @@ describe('后台命令会话', () => {
 
       await manager.writeInput(SESSION_A, first.id, '', true)
       assert.equal((await waitForTerminal(manager, first.id)).task.status, 'completed')
+      const clock = t.mock.method(Date, 'now', () => Date.parse(second.startedAt) + 133_000)
+      const list = await createCommandTools(manager, SESSION_A).manageCommand.execute({ action: 'list' }, {
+        projectDir: fixture.root, additionalDirs: [], abortSignal: new AbortController().signal,
+      })
+      clock.mock.restore()
+      assert.equal(list.isError, false)
+      assert.deepEqual(list.data.split('\n'), [
+        `${second.id}  running  elapsed=2m13s  ${fixture.command}  cwd=.`,
+        `${first.id}  completed  exit=0  ${fixture.command}  cwd=workspace`,
+      ])
       assert.deepEqual(
         (await manager.backgroundTasks(SESSION_A)).tasks.map((task) => [task.id, task.status]),
         [[second.id, 'running'], [first.id, 'completed']],

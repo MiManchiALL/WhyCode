@@ -143,18 +143,17 @@ async function withPdf<T>(
 }
 
 async function readPdfBytes(path: string): Promise<Buffer> {
-  let info
-  try {
-    info = await stat(resolve(path))
-  } catch (error) {
-    throw new PdfProcessingError('unavailable', `无法读取 PDF：${basename(path)}`, { cause: error })
+  function sourceReadFailed(error: unknown): never {
+    const code = error instanceof Error && 'code' in error && error.code === 'ENOENT' ? 'source-not-found' : 'unavailable'
+    throw new PdfProcessingError(code, `无法读取 PDF：${basename(path)}`, { cause: error })
   }
+  const info = await stat(resolve(path)).catch(sourceReadFailed)
   if (!info.isFile()) throw new PdfProcessingError('corrupted', 'PDF 来源不是普通文件')
   if (info.size <= 0) throw new PdfProcessingError('empty', 'PDF 文件为空')
   if (info.size > PDF_ATTACHMENT_MAX_SOURCE_BYTES) {
     throw new PdfProcessingError('too-large', 'PDF 文件超过 50 MB 上限')
   }
-  const bytes = await readFile(resolve(path))
+  const bytes = await readFile(resolve(path)).catch(sourceReadFailed)
   if (bytes.byteLength > PDF_ATTACHMENT_MAX_SOURCE_BYTES) {
     throw new PdfProcessingError('too-large', 'PDF 文件超过 50 MB 上限')
   }

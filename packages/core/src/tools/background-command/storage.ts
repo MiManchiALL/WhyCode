@@ -142,6 +142,20 @@ export class CommandTaskStorage {
     })
   }
 
+  markHistoryPruned(sessionId: string): Promise<void> {
+    return writeFile(resolve(this.sessionDir(sessionId), '.history-pruned'), '', { flag: 'a' })
+  }
+
+  async hasPrunedHistory(sessionId: string): Promise<boolean> {
+    try {
+      await stat(resolve(this.sessionDir(sessionId), '.history-pruned'))
+      return true
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false
+      throw error
+    }
+  }
+
   private async readManifest(path: string): Promise<PersistedCommandTask | null> {
     try {
       const parsed = persistedCommandTaskSchema.safeParse(JSON.parse(await readFile(path, 'utf-8')))

@@ -84,6 +84,8 @@ describe('搜索无 ripgrep 回退', () => {
     const result = await grepTool.execute({ pattern: '[a].*', literal: true, include: 'literal.txt' }, ctx)
     assert.match(result.data, /literal.txt:1:\[a\]\.\*/)
     await assert.rejects(grepTool.execute({ pattern: '[', include: 'missing.txt' }, ctx), /regular expression/i)
+    await assert.rejects(grepTool.execute({ pattern: 'a'.repeat(12_000) + '[', path: 'literal.txt' }, ctx),
+      error => error instanceof Error && error.message.length < 100 && /unterminated character class/i.test(error.message))
   })
   it('并发 Node.js 遍历仍支持 glob 与 grep 核心语义', async () => {
     const glob = await globTool.execute({ pattern: '**/*.{ts,tsx}' }, ctx)
