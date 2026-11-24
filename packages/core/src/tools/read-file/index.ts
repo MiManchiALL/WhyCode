@@ -57,7 +57,7 @@ export function createReadFileTool(options: ReadFileToolOptions = {}) {
           return readPdf(input.path, input.pages === undefined ? undefined : parsePageRange(input.pages)!, options.pdf, ctx)
         case 'text': {
           const path = await resolveAllowed(ctx, input.path)
-          return readText(path, input, ctx).catch(error => rethrowTargetError(error, ctx, path, '文件'))
+          return readText(path, input, ctx).catch(error => rethrowTargetError(error, '文件'))
         }
       }
     },
