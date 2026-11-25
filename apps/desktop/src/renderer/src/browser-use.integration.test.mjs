@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, before, describe, it } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { build } from 'vite'
@@ -13,16 +13,8 @@ import tailwindcss from '@tailwindcss/vite'
 
 const require = createRequire(import.meta.url)
 const desktop = path.resolve(import.meta.dirname, '../../..')
-test('Browser 真实 webview：独立多页、后台操作、持久标签、交还、取消与清理', {
-  timeout: 120_000,
-  skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY,
-}, async t => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'whycode-browser-use-'))
-  t.after(async () => {
-    assert.equal(path.dirname(directory), path.resolve(tmpdir()))
-    assert.ok(path.basename(directory).startsWith('whycode-browser-use-'))
-    await rm(directory, { recursive: true, force: true })
-  })
+
+async function buildBrowserFixture(directory) {
   const common = { configFile: false, root: desktop, logLevel: 'silent' }
   await build({ ...common, plugins: [react(), tailwindcss()], define: { 'process.env.NODE_ENV': '"production"' },
     build: { outDir: directory, emptyOutDir: false, minify: false, lib: {
@@ -42,11 +34,34 @@ test('Browser 真实 webview：独立多页、后台操作、持久标签、交�
   await writeFile(path.join(directory, 'index.html'), html.replace('<script type="module" src="/src/main.tsx"></script>',
     '<link rel="stylesheet" href="./renderer.css"><script src="./renderer.js"></script>'))
   await writeFile(path.join(directory, 'start.mjs'), "import { app } from 'electron'; import('./main/main.mjs').catch(error => { process.stderr.write(String(error.stack)); app.exit(1) });")
-  const env = { ...process.env, WHYCODE_BROWSER_TEST_DIR: directory }
-  delete env.ELECTRON_RUN_AS_NODE
-  const { stdout, stderr } = await promisify(execFile)(require('electron'), [path.join(directory, 'start.mjs')], {
-    env, windowsHide: true, timeout: 90_000, maxBuffer: 2_000_000,
+}
+
+describe('Browser 真实 webview', {
+  skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY,
+}, () => {
+  let directory
+  before(async () => {
+    directory = await mkdtemp(path.join(tmpdir(), 'whycode-browser-use-'))
+    await buildBrowserFixture(directory)
+  }, { timeout: 120_000 })
+  after(async () => {
+    if (!directory) return
+    assert.equal(path.dirname(directory), path.resolve(tmpdir()))
+    assert.ok(path.basename(directory).startsWith('whycode-browser-use-'))
+    await rm(directory, { recursive: true, force: true })
   })
-  assert.match(stdout, /browser use passed/)
-  assert.doesNotMatch(stderr, /Invalid guestInstanceId|Uncaught|render-process-gone/)
+  for (const [scenario, title] of [
+    ['navigation', '文档就绪、导航、证书、弹窗与键盘输入'],
+    ['lifecycle', '独立多页、视口截图、后台操作、交还、取消与清理'],
+  ]) {
+    it(title, { timeout: 120_000 }, async t => {
+      const env = { ...process.env, WHYCODE_BROWSER_TEST_DIR: directory }
+      delete env.ELECTRON_RUN_AS_NODE
+      const { stdout, stderr } = await promisify(execFile)(require('electron'), [path.join(directory, 'start.mjs'), scenario], {
+        env, signal: t.signal, windowsHide: true, timeout: 90_000, maxBuffer: 2_000_000,
+      })
+      assert.ok(stdout.includes(`browser ${scenario} passed`), stdout)
+      assert.doesNotMatch(stderr, /Invalid guestInstanceId|Uncaught|render-process-gone/)
+    })
+  }
 })
