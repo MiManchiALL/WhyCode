@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { latestUserTurnIndex, withUserTurn } from '../context/user-turn.ts'
 import {
   carryMcpToolState,
   clearMcpProjectTrust,
@@ -74,6 +75,16 @@ describe('MCP 会话状态', () => {
       findMcpToolState(compacted).trustedProjectConfigurationFingerprint,
       'c'.repeat(64),
     )
+  })
+
+  it('压缩后回退到用户消息之前恢复当时的工具信任，继续原回合沿用已撤销的状态', () => {
+    const trusted = createMcpToolStateMessage({ tools: [], serverInstructions: [],
+      trustedProjectConfigurationFingerprint: 'a'.repeat(64) })
+    const cleared = createMcpToolStateMessage({ tools: [], serverInstructions: [], trustedProjectConfigurationFingerprint: null })
+    const user = withUserTurn({ role: 'user', content: '当前问题' }, 'turn', true)
+    const messages = carryMcpToolState([trusted, user, cleared], [user])
+    assert.deepEqual(findMcpToolState(messages.slice(0, latestUserTurnIndex(messages))), findMcpToolState([trusted]))
+    assert.deepEqual(findMcpToolState(messages), findMcpToolState([cleared]))
   })
 
   it('Fork 只清除项目配置信任，不丢失已发现工具和服务器说明', () => {

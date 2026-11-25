@@ -36,7 +36,10 @@ export function recentPdfUserTurns(messages: readonly ModelMessage[]): PdfUserTu
   const turns = new Map<string, Set<string>>()
   for (const message of messages) {
     const metadata = (message as ConversationMessage).whycode
-    for (const turn of metadata?.recentUserTurns ?? []) turns.set(turn.id, new Set(turn.pdfIds))
+    if (metadata?.recentUserTurns) {
+      turns.clear()
+      for (const turn of metadata.recentUserTurns) turns.set(turn.id, new Set(turn.pdfIds))
+    }
     const turn = metadata?.userTurn
     if (turn) {
       if (turn.startsTurn && !turns.has(turn.id)) turns.set(turn.id, new Set())
@@ -52,11 +55,11 @@ export function recentUserPdfIds(messages: readonly ModelMessage[]): Set<string>
   return new Set(recentPdfUserTurns(messages).flatMap(turn => turn.pdfIds))
 }
 
-export function carryRecentPdfTurns(message: ModelMessage, source: readonly ModelMessage[]): ModelMessage {
+export function carryRecentPdfTurns(message: ConversationMessage, source: readonly ModelMessage[]) {
   return {
     ...message,
-    whycode: { ...(message as ConversationMessage).whycode, recentUserTurns: recentPdfUserTurns(source) },
-  } as ConversationMessage
+    whycode: { ...message.whycode, recentUserTurns: recentPdfUserTurns(source) },
+  }
 }
 
 /** 元数据随 canonical messages 持久化，但绝不作为 Provider 参数或提示词发送。 */

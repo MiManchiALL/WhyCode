@@ -119,25 +119,22 @@ describe('摘要 PTL 扩大原样保留尾部', () => {
   })
 
   for (const gap of [2000, 20_000]) {
-    it(`PTL 差额 ${gap} 退到 U 或其后首批次时，将旧 P 合入 H`, async () => {
+    it(`PTL 差额 ${gap} 退到 U 或其后首批次时，复用 H 并在 U 后保留同回合的旧 P`, async () => {
       let calls = 0
       const model = new MockLanguageModelV4({ doGenerate: async () => {
-        calls++
-        if (calls === 2) throw overflow(gap)
-        return response(calls === 1 ? '原范围 H' : '重新合并 H')
+        if (++calls === 2) throw overflow(gap)
+        return response('原范围 H')
       } })
       const latest = root('B')
       const batch = toolBatch(['B-prefix'], 12_000)
       const messages = [oldSummary('H1'), root('A'), assistant('A 结果'), latest,
         oldSummary(null, 'P_B1', 'B'), ...batch, tail]
       const output = await compact(model, messages)
-      assert.equal(calls, 3)
-      assert.doesNotMatch(prompt(model, 0), /P_B1/)
-      assert.match(prompt(model, 2), /whycode-completed-turn-prefix-summary/)
-      assert.match(prompt(model, 2), /P_B1/)
-      assert.doesNotMatch(prompt(model, 2), /任务 B|B-prefix|原始尾部/)
-      assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.historySummary, '重新合并 H')
-      assert.deepEqual(output.messages.slice(1), [latest, ...batch, tail])
+      assert.equal(calls, 2)
+      assert.doesNotMatch(prompt(model, 0), /P_B1|任务 B|B-prefix|原始尾部/)
+      assert.match(prompt(model, 1), /P_B1/)
+      assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.historySummary, '原范围 H')
+      assert.deepEqual(output.messages.slice(1), [latest, oldSummary(null, 'P_B1', 'B'), ...batch, tail])
     })
   }
 

@@ -1,5 +1,6 @@
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
+import { latestUserTurnIndex } from '../context/user-turn.ts'
 import { MCP_MAX_LOADED_TOOLS, type McpToolReference } from './catalog.ts'
 import type { McpServerInstructionsSnapshot } from './manager-types.ts'
 
@@ -56,8 +57,9 @@ export function createMcpToolStateMessage(
 
 export function findMcpToolState(
   messages: readonly ModelMessage[],
+  end = messages.length,
 ): McpToolState {
-  for (let index = messages.length - 1; index >= 0; index--) {
+  for (let index = end - 1; index >= 0; index--) {
     const parsed = parseMcpToolStateMessage(messages[index]!)
     if (parsed) return parsed
   }
@@ -79,20 +81,20 @@ export function withoutMcpToolState(
   return messages.filter((message) => !isMcpToolStateMessage(message))
 }
 
-/**
- * 压缩不让模型总结内部工具状态；摘要完成后把压缩前的最新状态原样语义重建。
- * 这样工具数组和 server instructions 不因压缩退回首次检索状态。
- */
+/** 保留根消息之前的工具状态。该回合的变更只随其后缀恢复。 */
 export function carryMcpToolState(
   source: readonly ModelMessage[],
   compacted: readonly ModelMessage[],
 ): ModelMessage[] {
-  const state = findMcpToolState(source)
   const next = withoutMcpToolState(compacted)
-  return state.tools.length > 0 || state.serverInstructions.length > 0
-    || state.trustedProjectConfigurationFingerprint !== null
-    ? [...next, createMcpToolStateMessage(state)]
-    : next
+  const root = latestUserTurnIndex(next)
+  const before = findMcpToolState(source, root < 0 ? 0 : latestUserTurnIndex(source))
+  if (before.tools.length || before.serverInstructions.length || before.trustedProjectConfigurationFingerprint !== null) {
+    next.splice(root, 0, createMcpToolStateMessage(before))
+  }
+  const current = findMcpToolState(source)
+  if (!sameMcpToolState(before, current)) next.push(createMcpToolStateMessage(current))
+  return next
 }
 
 /** Fork 保留已发现的工具与服务器说明，但新会话必须重新确认项目 MCP 配置。 */
