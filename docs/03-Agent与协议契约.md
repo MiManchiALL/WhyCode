@@ -241,8 +241,8 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | 工具 | 稳定输入与关键语义 |
 |---|---|
 | `ListDir` | `{path,offset?,limit?}`；有界目录分页 |
-| `Glob` | `{path,pattern,offset?,limit?}`；有界文件名匹配 |
-| `Grep` | `{path,pattern,outputMode?,include?,caseSensitive?,literal?,context?,offset?,limit?}` |
+| `Glob` | `{pattern,path?,gitignore?,offset?}`，递归匹配文件路径 |
+| `Grep` | `{pattern,path?,include?,outputMode?,caseSensitive?,gitignore?,offset?}`，按正则逐行搜索文件内容 |
 | `ReadFile` | `path` 加可选 `offset`、`limit`、`column`、`pages`，统一读取文本、图片和 PDF |
 | `WriteFile` | `{path,content}`；只用于新建或整文件重写 |
 | `EditFile` | `{edits:[{path,oldText,newText,replaceAll?}]}`，1～50 项，基于调用开始时原快照原子预检 |
@@ -253,11 +253,13 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `Skill` | `{skillId,resourcePath?}`；只读当前根任务冻结 Skill |
 | `Subagent` | `{action,name?,description?,prompt?,subagent_id?}`；`spawn/send/stop/list` 启动、发送消息、停止或发现当前会话的子代理，参数组合见 §6.2 |
 
-`Glob` 与 `Grep` 每次执行有 30 秒总预算，覆盖目录校验、搜索和回退。本地与 SSH 到期均取消搜索，返回失败工具结果，所属 Agent 回合可继续。结果按路径排序，每页最多 32 KiB。`offset` 按结果条目计数，Grep 内容模式的匹配行和上下文行各算一条。只有确认还有结果时才返回下一页的 `offset`。
+`Glob` 与 `Grep` 每次执行有 30 秒总预算，覆盖目录校验、搜索和回退。本地与 SSH 到期均取消搜索，返回失败工具结果，所属 Agent 回合可继续。结果按路径排序，每页最多 32 KiB。`Glob` 每页最多 200 个文件，`Grep` 每页最多 250 条结果。`offset` 按已显示的结果条数推进，只有确认还有结果时才返回下一页的 `offset`。
 
-`Glob` 在能缩短本页结果时，用 `#`、`##` 等目录标题表示连续文件的共同路径。标题末尾带 `/`，下一层相对于上一级目录。每页独立列出所需的目录，标题不计入 `offset` 或 `limit`。`Glob` 的 `path` 须为目录，目录内没有匹配文件属于正常空结果。目标缺失时，`ReadFile` 返回 `文件不存在`，`Glob` 和 `Grep` 返回 `搜索路径不存在`。
+`Glob` 在能缩短本页结果时，用 `#`、`##` 等目录标题表示连续文件的共同路径。标题末尾带 `/`，下一层相对于上一级目录。每页独立列出所需的目录，标题不计入文件数。`Glob` 的 `path` 须为目录，目录内没有匹配文件属于正常空结果。目标缺失时，`ReadFile` 返回 `文件不存在`，`Glob` 和 `Grep` 返回 `搜索路径不存在`。
 
-无路径分隔符的 glob 匹配各层文件名。`Glob` 查找文件名时包含项目忽略的文件，仍跳过固定排除目录。`Grep` 搜索目录时遵循项目 ignore 规则，`include` 进一步限定范围。明确指定普通文件可以搜索被项目忽略的文件。单条内容标为 `路径:行号:正文`，连续多条共用路径标题，行号后的 `:` 表示匹配，`-` 表示上下文。回退搜索遇到超过 2 MiB 的指定文件时返回未搜索原因，目录搜索只汇总已跳过的大文件、不可读项或遍历上限。
+两种工具从指定目录开始遍历，默认按 `.gitignore`、`.git/info/exclude`、`.ignore` 和 `.rgignore` 筛选目录内的条目。显式指定的目录作为搜索起点，即使上层规则忽略该目录，其内部条目仍按各级规则筛选。`gitignore=false` 关闭项目忽略规则，两种设置在遍历时都跳过固定排除目录。`Glob` 的 `pattern` 和 `Grep` 的 `include` 进一步筛选文件，无路径分隔符的 glob 匹配各层文件名。`Grep` 明确指定普通文件时可以搜索被项目忽略的文件。
+
+`Grep` 默认区分大小写。`content`（默认）只返回匹配行，单条标为 `路径:行号:正文`，连续多条共用路径标题。`files_with_matches` 返回文件路径，`count` 返回每个文件的匹配行数，这两种模式每个命中文件各占一条。回退搜索遇到超过 2 MiB 的指定文件时返回未搜索原因，目录搜索只汇总已跳过的大文件、不可读项或遍历上限。
 
 `ReadFile` 的 `path` 接受工作区相对路径、已授权的绝对路径或当前会话提供的 `attachment://<UUID>` PDF 引用。文本、图片和 PDF 按文件类型校验参数，`pages` 仅用于 PDF。图片和 PDF 的返回方式见 §3.6–3.7。
 

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { displayToolPath, resolveAllowed, rethrowTargetError, IGNORED_DIRS } from '../fs-utils.ts'
 import { fileGlob, incompleteScan, walkSearchFiles } from '../search/fallback.ts'
-import { runRipgrepLines, SEARCH_EXCLUSIONS } from '../search/ripgrep.ts'
+import { ripgrepFileArgs, runRipgrepLines } from '../search/ripgrep.ts'
 import { withSearchDeadline } from '../search/deadline.ts'
 import { SearchPage } from '../search/page.ts'
 import { formatGlobPaths } from './format-paths.ts'
@@ -12,7 +12,7 @@ export const LIST_DIR_TOOL_NAME = 'ListDir'
 export const GLOB_TOOL_NAME = 'Glob'
 
 const DEFAULT_LIST_LIMIT = 500
-const DEFAULT_GLOB_LIMIT = 200
+const GLOB_PAGE_SIZE = 200
 
 export const listDirTool = buildTool({
   name: LIST_DIR_TOOL_NAME,
@@ -50,14 +50,14 @@ export const listDirTool = buildTool({
 
 export const globTool = buildTool({
   name: GLOB_TOOL_NAME,
-  description: '按模式快速查找文件名',
+  description: '按 glob 模式递归查找文件',
   prompt:
-    '按 glob 模式递归查找文件。已知目录时用 path 缩小搜索根目录，例如 path="src"、pattern="**/*.ts"。支持 limit/offset 分页。',
-  inputSchema: z.object({
+    '在指定目录下递归查找路径符合 glob 模式的文件，结果按路径排序。`*.ts` 匹配任意层级的 `.ts` 文件，`src/*.ts` 只匹配 `src` 目录本层的 `.ts` 文件。',
+  inputSchema: z.strictObject({
     pattern: z.string().min(1).describe('glob 模式，支持 *、**、? 和 {a,b}'),
     path: z.string().optional().describe('搜索根目录，默认项目根目录'),
-    limit: z.number().int().min(1).max(1_000).optional().describe('返回条数，默认 200'),
-    offset: z.number().int().min(0).optional().describe('跳过条数，默认 0'),
+    gitignore: z.boolean().optional().describe('目录搜索是否遵循项目忽略规则，默认 true'),
+    offset: z.number().int().min(0).optional().describe('跳过的匹配文件数，默认 0'),
   }),
   isReadOnly: true,
   kind: 'read',
@@ -65,29 +65,30 @@ export const globTool = buildTool({
   async execute(input, ctx) {
     return withSearchDeadline(ctx, async ctx => {
       const io = ctx.workspaceIO ?? localWorkspaceIO
-      const { relative } = io.path
-
       const root = await resolveAllowed(ctx, input.path ?? '.')
       ctx.abortSignal.throwIfAborted()
       const stats = await io.fs.stat(root).catch(error => rethrowTargetError(error, '搜索路径'))
       if (!stats.isDirectory()) return { data: '搜索路径应为目录', isError: true }
-      const page = new SearchPage(input.offset ?? 0, input.limit ?? DEFAULT_GLOB_LIMIT)
-      const pattern = input.pattern.replaceAll('\\', '/').replace(/^\.\//, '/')
-      const add = (path: string) => page.add(displayToolPath(ctx.projectDir, root, path, io))
+      const page = new SearchPage(input.offset ?? 0, GLOB_PAGE_SIZE)
+      const gitignore = input.gitignore ?? true
+      const matcher = fileGlob(input.pattern)
+      const addMatch = (relativePath: string) => {
+        const path = relativePath.replaceAll('\\', '/').replace(/^\.\//, '')
+        return !matcher.match(path) || page.add(displayToolPath(ctx.projectDir, root, path, io))
+      }
       const native = await runRipgrepLines(
-        ['--files', '--hidden', '--no-ignore', '--sort', 'path', '--glob', pattern, ...SEARCH_EXCLUSIONS, '--', '.'],
+        ['--files', ...ripgrepFileArgs(gitignore, matcher.pattern), '--', '.'],
         root,
         ctx.abortSignal,
-        add,
+        addMatch,
         io,
       )
 
       let incomplete: string | undefined
       if (!native) {
-        const matcher = fileGlob(pattern)
         const status = { limited: false, unreadable: 0 }
-        for await (const path of walkSearchFiles(root, ctx.abortSignal, io, status)) {
-          if (matcher.match(relative(root, path).replaceAll('\\', '/')) && !add(path)) break
+        for await (const path of walkSearchFiles(root, gitignore, status, ctx)) {
+          if (!addMatch(io.path.relative(root, path))) break
         }
         incomplete = incompleteScan(status)
       }
