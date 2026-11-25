@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, type TestContext } from 'node:test'
 import type { ModelMessage } from 'ai'
+import { withUserTurn } from '../context/user-turn.ts'
 import { emptyTaskPlanState } from '../tasks/types.ts'
 import { localWorkspace } from '../workspace/types.ts'
 import { buildLoadedSession, parseTranscript, SessionCorruptError } from './chain.ts'
@@ -89,7 +90,46 @@ describe('快照回合边界', () => {
     assert.deepEqual(cold.messagesBeforeTurn('first'), [])
   })
 
-  it('拒绝越界、重复、压缩后残留的锚点和旧 schema', async (t) => {
+  it('压缩只重定位保留的最新用户回合，并沿用该回合开始时的计划状态', async (t) => {
+    const { store, journal, transcript } = await setup(t)
+    const old = withUserTurn({ role: 'user', content: '相同的正文' }, 'old', true)
+    const latest = withUserTurn({ role: 'user', content: '相同的正文' }, 'latest', true)
+    const steering = withUserTurn({ role: 'user', content: '回合内插话' }, 'latest', false)
+    const before = { version: 2, activePlan: null }
+    const after = { version: 3, activePlan: null }
+    await journal.recordTurnStart('old', [old])
+    await journal.recordStep('old', [{ role: 'assistant', content: '旧回复' }], before)
+    await journal.recordTurnEnd('old', 'completed')
+    await journal.recordTurnStart('latest', [latest])
+    await journal.recordStep('latest', [steering], after)
+    await journal.recordTurnEnd('latest', 'completed')
+
+    const summary: ModelMessage = { role: 'user', content: '历史摘要' }
+    await journal.recordSnapshot('compact', [summary, latest, steering])
+    const cold = await store.open(journal.sessionId)
+    for (const recorder of [journal, cold]) {
+      assert.deepEqual(recorder.messagesBeforeTurn('latest'), [summary])
+      assert.deepEqual(recorder.taskStateBeforeTurn('latest'), before)
+      assert.deepEqual(recorder.initialTaskState, after)
+      assert.equal(recorder.messagesBeforeTurn('old'), null)
+    }
+
+    const entries = parseTranscript(await readFile(transcript, 'utf8'))
+    const snapshot = entries.at(-1)!
+    assert.ok(snapshot.type === 'snapshot')
+    const anchor = snapshot.turnStarts[0]!
+    assert.deepEqual(anchor, { turnId: 'latest', messageCount: 1, taskState: before })
+    for (const turnStarts of [
+      [{ ...anchor, turnId: 'old' }],
+      [{ ...anchor, messageCount: 2 }],
+      [{ turnId: 'old', messageCount: 0, taskState: before }, anchor],
+    ]) assert.equal(sessionEntrySchema.safeParse({ ...snapshot, turnStarts }).success, false)
+
+    await cold.recordSnapshot('compact', [summary])
+    assert.equal((await store.open(journal.sessionId)).messagesBeforeTurn('latest'), null)
+  })
+
+  it('拒绝越界、重复、未保留原消息的压缩锚点和旧 schema', async (t) => {
     const { journal, transcript } = await setup(t)
     await journal.recordTurnStart('first', [{ role: 'user', content: '问题' }])
     await journal.recordStep('first', [{ role: 'assistant', content: '回答' }])

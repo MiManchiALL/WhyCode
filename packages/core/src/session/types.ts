@@ -1,7 +1,7 @@
 import { modelMessageSchema, type ModelMessage } from 'ai'
 import { z } from 'zod'
 import { questionReplySchema, type QuestionReply } from '../user-questions.ts'
-import { conversationMetadataSchema } from '../context/user-turn.ts'
+import { conversationMetadataSchema, latestUserTurnIndex, userTurn } from '../context/user-turn.ts'
 import {
   consensusPersistedStateSchema,
   type ConsensusPersistedState,
@@ -397,6 +397,13 @@ const consensusTaskEndSchema = chainedEntrySchema.extend({
   taskState: taskPlanStateSchema,
 })
 
+/** 正式用户消息的身份和位置共同确定压缩后可回退的前缀。 */
+export function compactedUserTurnStart(messages: readonly ModelMessage[]) {
+  const messageCount = latestUserTurnIndex(messages)
+  const root = messages[messageCount]
+  return root?.role === 'user' ? { turnId: userTurn(root)!.id, messageCount } : null
+}
+
 const snapshotSchema = chainedEntrySchema.extend({
   type: z.literal('snapshot'),
   parentUuid: z.null(),
@@ -414,7 +421,7 @@ const snapshotSchema = chainedEntrySchema.extend({
   messages: messagesSchema,
   /** 换根时携带忙时输入；当前 schema 不为开发期旧会话补兼容默认值。 */
   pendingUserInputs: z.array(pendingUserInputSchema),
-  /** 锚点只引用本快照 messages 的前缀；压缩快照不保留旧回合边界。 */
+  /** 每个回合起点引用本快照 messages 的前缀。 */
   turnStarts: z.array(z.object({
     turnId: z.string().min(1),
     messageCount: z.number().int().nonnegative(),
@@ -434,8 +441,12 @@ const snapshotSchema = chainedEntrySchema.extend({
       ctx.addIssue({ code: 'custom', path: ['turnStarts', index, 'messageCount'], message: '回合边界超出快照历史' })
     }
   })
-  if (snapshot.reason === 'compact' && snapshot.turnStarts.length > 0) {
-    ctx.addIssue({ code: 'custom', path: ['turnStarts'], message: '压缩快照不能保留旧回合边界' })
+  const [start] = snapshot.turnStarts
+  if (snapshot.reason === 'compact' && start) {
+    const root = compactedUserTurnStart(snapshot.messages)
+    if (snapshot.turnStarts.length !== 1 || !root || start.turnId !== root.turnId || start.messageCount !== root.messageCount) {
+      ctx.addIssue({ code: 'custom', path: ['turnStarts'], message: '压缩边界必须指向保留的最新正式用户消息' })
+    }
   }
   snapshot.pendingUserInputs.forEach((input, inputIndex) => {
     input.attachments?.forEach((attachment, attachmentIndex) => {
@@ -605,7 +616,7 @@ export interface SessionRecorder {
   readonly btwContinuation: BtwContinuation | null
   /** 最近一条仍可编辑的侧链轮次；达到上限或失败后也保留。 */
   readonly latestBtwTurn: BtwConversationTurn | null
-  /** 仅返回仍位于当前活动父链上的 turn 起点；压缩/旧回滚之前的 turn 返回 null。 */
+  /** 返回当前活动历史中该回合之前的消息，已移除的回合返回 null。 */
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
   /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
   taskStateBeforeTurn(turnId: string): TaskPlanState | undefined

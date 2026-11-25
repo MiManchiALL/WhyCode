@@ -24,14 +24,17 @@ describe('正式 turn 身份与压缩后的附件窗口', () => {
     assert.equal(JSON.stringify(withoutConversationMetadata(compacted)).includes('whycode"'), false)
   })
 
-  it('compact snapshot 冷恢复和 Fork 保留摘要所属 turn、原文与窗口，不复活旧回滚锚点', async t => {
+  it('压缩后冷恢复和 Fork 保留最新回合起点、摘要归属、原文与附件窗口', async t => {
     const directory = await mkdtemp(join(tmpdir(), 'whycode-compact-turn-'))
     t.after(() => rm(directory, { recursive: true, force: true }))
     const store = new SessionStore(directory)
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:compact' })
+    const old = root('old')
+    await journal.recordTurnStart('old', [old])
+    await journal.recordTurnEnd('old', 'completed')
     const user = root('A')
     await journal.recordTurnStart('A', [user])
-    const history = carryRecentPdfTurns(createCompactSummaryMessage({ historySummary: 'H', turnPrefixSummary: null, turnId: null }), [root('old'), user])
+    const history = carryRecentPdfTurns(createCompactSummaryMessage({ historySummary: 'H', turnPrefixSummary: null, turnId: null }), [old])
     const prefix = createCompactSummaryMessage({ historySummary: null, turnPrefixSummary: 'P_A', turnId: 'A' })
     const messages = [history, user, prefix, { role: 'assistant' as const, content: '压缩后的进展' }]
     await journal.recordSnapshot('compact', messages, 'A')
@@ -42,7 +45,8 @@ describe('正式 turn 身份与压缩后的附件窗口', () => {
     const cold = await store.open(journal.sessionId)
     const fork = await store.fork(cold, 'A')
     for (const restored of [cold, fork, await store.open(fork.sessionId)]) {
-      assert.equal(restored.messagesBeforeTurn('A'), null)
+      assert.deepEqual(restored.messagesBeforeTurn('A'), [history])
+      assert.equal(restored.messagesBeforeTurn('old'), null)
       assert.equal(restored.initialMessages.filter(message => userTurn(message)?.startsTurn).length, 1)
       assert.equal(userTurn(restored.initialMessages[1]!)?.id, 'A')
       assert.deepEqual(recentPdfUserTurns(restored.initialMessages).map(turn => turn.id), ['old', 'A'])

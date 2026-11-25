@@ -1,4 +1,5 @@
 import { generateText, type LanguageModel, type ModelMessage, type ProviderMetadata, type ToolSet } from 'ai'
+import { isDeepStrictEqual } from 'node:util'
 import {
   COMPACT_HISTORY_SUMMARY_PROMPT, COMPACT_SYSTEM_PROMPT, COMPACT_TURN_PREFIX_SUMMARY_PROMPT,
   compactSummaryReference, createCompactApplicationContextMessage, createCompactSummaryMessage,
@@ -11,7 +12,7 @@ import { findTrailingTurnInputBatchStart, prepareCompaction, type SummarySource 
 import { compactionConversation } from './compact-context.ts'
 import { COMPACT_PTL_MAX_RETRIES, expandCompactionTail } from './compact-retry.ts'
 import { compactTailBudget } from './tokens.ts'
-import { carryRecentPdfTurns, userTurn } from './user-turn.ts'
+import { carryRecentPdfTurns, latestUserTurnIndex, recentPdfUserTurns, userTurn } from './user-turn.ts'
 import { dateForSummary } from '../prompts/current-date.ts'
 
 export interface CompactResult { messages: ModelMessage[]; summaryText: string }
@@ -60,7 +61,7 @@ export async function compactMessages(options: CompactOptions): Promise<CompactR
       source = preparation.turnPrefixSource
       turnPrefixSummary = source ? await summarizeSource(
         options, source, 'turn-prefix', Math.max(1, Math.floor(totalBudget / 3)),
-      ) : null
+      ) : preparation.carriedTurnPrefixSummary
       break
     } catch (error) {
       if (options.abortSignal.aborted || !(error instanceof ModelContextOverflowError)
@@ -75,13 +76,22 @@ export async function compactMessages(options: CompactOptions): Promise<CompactR
   const rebuilt: ModelMessage[] = [
     ...(historySummary ? [createCompactSummaryMessage({ historySummary, turnPrefixSummary: null, turnId: null })] : []),
     ...(preparation.pinnedUser ? [preparation.pinnedUser] : []),
-    ...(turnPrefixSummary ? [createCompactSummaryMessage({ historySummary: null, turnPrefixSummary, turnId: preparation.turnId })] : []),
     ...preparation.tail,
     ...preparation.pendingControls,
   ]
   if (!rebuilt.length) return { messages: [...messages], summaryText: '' }
-  carryPendingQuestions(rebuilt, messages)
-  rebuilt[0] = carryRecentPdfTurns(rebuilt[0]!, messages)
+  const root = latestUserTurnIndex(rebuilt)
+  if (turnPrefixSummary) {
+    rebuilt.splice(root + 1, 0, createCompactSummaryMessage({ historySummary: null, turnPrefixSummary, turnId: preparation.turnId }))
+  }
+  if (root > 0) {
+    // 编辑会截到原文之前，这个前缀也要能独立恢复当时的待答题和附件窗口。
+    const before = rebuilt.slice(0, root)
+    carryCompactedState(before, messages.slice(0, latestUserTurnIndex(messages)), 0)
+    rebuilt[0] = before[0]!
+    rebuilt[root - 1] = before.at(-1)!
+  }
+  carryCompactedState(rebuilt, messages, turnPrefixSummary ? root + 1 : Math.max(0, root))
   if (options.applicationContext) {
     const insertAt = findTrailingTurnInputBatchStart(rebuilt) ?? rebuilt.length
     rebuilt.splice(insertAt, 0, createCompactApplicationContextMessage([options.applicationContext]))
@@ -90,6 +100,12 @@ export async function compactMessages(options: CompactOptions): Promise<CompactR
     messages: applyProjectInstructions(rebuilt, findProjectInstructionsMessage(messages)),
     summaryText: [historySummary, turnPrefixSummary].filter(Boolean).join('\n\n---\n\n'),
   }
+}
+
+function carryCompactedState(target: ModelMessage[], source: readonly ModelMessage[], pdfIndex: number): void {
+  carryPendingQuestions(target, source)
+  const carrier = carryRecentPdfTurns(target[pdfIndex]!, source)
+  if (!isDeepStrictEqual(carrier.whycode.recentUserTurns, recentPdfUserTurns(target))) target[pdfIndex] = carrier
 }
 
 async function summarizeSource(

@@ -16,6 +16,7 @@ export interface SummarySource {
 
 export interface CompactionPreparation {
   carriedHistorySummary: string | null
+  carriedTurnPrefixSummary: string | null
   historySource: SummarySource | null
   turnPrefixSource: SummarySource | null
   turnId: string | null
@@ -49,7 +50,7 @@ export function prepareCompaction(
   const budgetStart = firstKeptMessage ? raw.indexOf(firstKeptMessage) : pickBudgetStart(raw, keepRecentTokens)
   let tailStart = manual ? raw.length
     : safeBoundaryBefore(raw, Math.min(budgetStart, protectedStart ?? raw.length))
-  // U 后没有被移出的工作记录时，把 U 一起留在尾部；旧 P 沿用归入 H 的规则。
+  // U 后没有被移出的工作记录时，把 U 一起留在尾部。
   if (!manual && turnStart >= 0 && tailStart === turnStart + 1) tailStart = safeBoundaryBefore(raw, turnStart)
   const pendingControls = manual ? [findPendingTurnAbortedIndex(raw)]
     .filter((index): index is number => index !== null).map(index => raw[index]!) : []
@@ -59,7 +60,7 @@ export function prepareCompaction(
   if (manual && raw.length === 0 && !summary.historySummary && !summary.turnPrefixSummary) return null
 
   const splitCurrentTurn = !manual && turnStart >= 0 && turnStart < tailStart
-  const turnId = splitCurrentTurn ? userTurn(raw[turnStart]!)!.id : null
+  const turnId = !manual && turnStart >= 0 ? userTurn(raw[turnStart]!)!.id : null
   const sameTurn = turnId !== null && turnId === summary.turnId
   const historyMessages = raw.slice(0, splitCurrentTurn ? turnStart : tailStart)
     .filter(message => !pendingControls.includes(message))
@@ -70,6 +71,7 @@ export function prepareCompaction(
   const prefixMessages = splitCurrentTurn ? raw.slice(turnStart + 1, tailStart) : []
   return {
     carriedHistorySummary: summary.historySummary,
+    carriedTurnPrefixSummary: sameTurn && !splitCurrentTurn ? summary.turnPrefixSummary : null,
     historySource,
     turnPrefixSource: splitCurrentTurn ? {
       previousSummary: sameTurn ? summary.turnPrefixSummary : null,

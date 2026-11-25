@@ -1,5 +1,5 @@
 import { questionResult } from '../test-fixtures/user-questions.ts'
-import { pendingUserQuestions } from './question-state.ts'
+import { pendingUserQuestions, withQuestionReply } from './question-state.ts'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { tool, type ModelMessage } from 'ai'
@@ -10,7 +10,7 @@ import { createCompactApplicationContextMessage, createCompactSummaryMessage, pa
 import { compactMessages, type CompactOptions } from './compact.ts'
 import { prepareCompaction, pickBudgetStart } from './compact-boundary.ts'
 import { compactTailBudget } from './tokens.ts'
-import { userTurn, withUserTurn } from './user-turn.ts'
+import { latestUserTurnIndex, recentPdfUserTurns, userTurn, withUserTurn } from './user-turn.ts'
 
 const capabilities = { contextWindow: 128_000, maxOutput: 20_000 }
 const tail = { role: 'assistant' as const, content: 'TAIL_ONLY_' + 'x'.repeat(75_000) }
@@ -73,13 +73,9 @@ describe('按预算划分历史与当前正式 turn', () => {
       const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt)
       assert.match(prompt, /H1/)
       assert.match(prompt, /A 已完成/)
-      assert.doesNotMatch(prompt, /完整任务 B|B-first/)
-      if (previousPrefix) {
-        assert.match(prompt, /whycode-completed-turn-prefix-summary/)
-        assert.match(prompt, /旧 P_B/)
-      }
-      assert.equal(output.summaryText, '新 H')
-      assert.deepEqual(output.messages.slice(1), [latest, ...batch])
+      assert.doesNotMatch(prompt, /完整任务 B|B-first|旧 P_B/)
+      const prefix = previousPrefix ? [state(null, previousPrefix, 'B')] : []
+      assert.deepEqual(output.messages.slice(1), [latest, ...prefix, ...batch])
     }
   })
 
@@ -153,6 +149,22 @@ describe('按预算划分历史与当前正式 turn', () => {
 })
 
 describe('全量摘要输入与手动压缩', () => {
+  it('回到保留的根消息之前可恢复原待答题和 PDF 窗口，回合内的上传只属于该回合', async () => {
+    const item = { header: '环境', question: '使用哪个环境？' }
+    const issue = questionResult({ id: 'early', questions: [item] })
+    const before = [root('A'), call('early', 'AskUserQuestion', { questions: [item] }), issue]
+    const question = pendingUserQuestions(before)[0]!
+    const reply = withQuestionReply(root('B'), [{ id: question.id, answer: '本地' }])
+    const steering = withUserTurn({ role: 'user', content: '补充文档' }, 'B', false, [crypto.randomUUID()])
+    const source = [...before, reply, steering, tail]
+    const { messages } = await compact(summaryModel(['历史摘要', '回合前缀']), source)
+    const prefix = messages.slice(0, latestUserTurnIndex(messages))
+    assert.deepEqual(pendingUserQuestions(prefix), [question])
+    assert.deepEqual(recentPdfUserTurns(prefix), recentPdfUserTurns(before))
+    assert.deepEqual(pendingUserQuestions(messages), [])
+    assert.deepEqual(recentPdfUserTurns(messages), recentPdfUserTurns(source))
+  })
+
   it('尚未回答的早期问题不固定整个历史，自动和手动压缩均可按 ID 恢复', async () => {
     const item = { header: '环境', question: '使用哪个环境？' }
     const issue = questionResult({ id: 'early', questions: [item] })

@@ -13,12 +13,13 @@ import { SessionStore } from '../session/store.ts'
 import { localWorkspace } from '../workspace/types.ts'
 import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
+import { inspectLatestTurnEdit } from './turn-edit.ts'
 import { createUserInput } from './user-input.ts'
 import type { CoreEvent } from '../events.ts'
 import { toViewEvent } from '../session/view-events.ts'
 
 describe('运行中的多次压缩', () => {
-  it('中止摘要保留原历史，新消息重试，快照写稳后即使停止也只提交一次', async t => {
+  it('微压缩后中止摘要仍可编辑重发，完整快照写稳后停止只提交一次', async t => {
     const directory = await mkdtemp(join(tmpdir(), 'whycode-compact-stop-'))
     t.after(() => rm(directory, { recursive: true, force: true }))
     const store = new SessionStore(directory)
@@ -26,30 +27,42 @@ describe('运行中的多次压缩', () => {
     const journal = await store.create({ workspace: localWorkspace(null), modelId: entry.id })
     const original: ModelMessage[] = [{ role: 'user', content: '早期任务' },
       { role: 'assistant', content: '早期工作记录'.repeat(40_000) },
+      { role: 'assistant', content: [{ type: 'tool-call', toolName: 'Grep', toolCallId: 'search', input: { pattern: 'x' } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolName: 'Grep', toolCallId: 'search',
+        output: { type: 'text', value: '匹配结果'.repeat(3_000) } }] },
       { role: 'user', content: '后续任务' }, { role: 'assistant', content: '近期工作记录'.repeat(6_000) }]
     await journal.recordSnapshot('rollback', original)
     const generating = deferred()
     const release = deferred()
     const saved = deferred()
     const publish = deferred()
-    const model = new MockLanguageModelV4({ doGenerate: async () => {
-      generating.resolve()
-      await release.promise
-      return { content: [{ type: 'text', text: '<summary>工作摘要</summary>' }],
-        finishReason: { unified: 'stop', raw: undefined }, usage: usage(100), warnings: [] }
-    } })
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        generating.resolve()
+        await release.promise
+        return { content: [{ type: 'text', text: '<summary>工作摘要</summary>' }],
+          finishReason: { unified: 'stop', raw: undefined }, usage: usage(100), warnings: [] }
+      },
+      doStream: async () => ({ stream: simulateReadableStream({ chunks: [
+        { type: 'text-start', id: 'answer' }, { type: 'text-delta', id: 'answer', delta: '已回答' },
+        { type: 'text-end', id: 'answer' }, { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: usage(100) },
+      ] }) }),
+    })
     const events: CoreEvent[] = []
     let written = Promise.resolve()
-    const session = new AgentSession({ model: { ...entry, create: () => model,
+    const createSession = (recorder: typeof journal) => new AgentSession({ model: { ...entry, create: () => model,
       capabilities: { ...entry.capabilities, contextWindow: 96_000, maxOutput: 12_000 } },
       providerConfig: { apiKey: 'test' }, promptContext: { projectDir: directory, osPlatform: 'win32' },
-      sessionRecorder: journal, requestApproval: async () => ({ approved: true }), emit: event => {
+      sessionRecorder: recorder, requestApproval: async () => ({ approved: true }), emit: event => {
         events.push(event)
         const view = toViewEvent(event)
-        if (view) written = journal.recordViewEvents([view])
+        if (view) written = recorder.recordViewEvents([view])
       } })
+    const session = createSession(journal)
     t.after(() => session.dispose())
-    const first = session.handleUserMessage('第一次发言')
+    const inputId = crypto.randomUUID()
+    await journal.recordUserInputWithId(inputId, '第一次发言', true)
+    const first = session.handleUserMessage('第一次发言', false, [], inputId)
     await Promise.race([generating.promise, Promise.resolve(first).then(reason => assert.fail(`摘要尚未开始，回合已结束 ${reason}`))])
     await written
     const progress = () => events.filter(e => e.type === 'context-compaction')
@@ -63,6 +76,11 @@ describe('运行中的多次压缩', () => {
     assert.equal(await first, 'aborted')
     assert.deepEqual(progress().map(e => e.status), ['running', 'stopped'])
     assert.ok(session.captureMessageSnapshot().some(message => message.content === original[1]!.content))
+    assert.deepEqual(events.filter(e => e.type === 'context-compacted').map(e => e.level), ['micro'])
+    const firstTurn = events.find(e => e.type === 'turn-start')!
+    await written
+    await inspectLatestTurnEdit(await store.open(journal.sessionId), firstTurn.turnId)
+    const edit = await session.prepareLatestTurnEdit(firstTurn.turnId, '改写后的问题')
 
     const recordSnapshot = journal.recordSnapshot.bind(journal)
     journal.recordSnapshot = async (...args) => {
@@ -70,24 +88,35 @@ describe('运行中的多次压缩', () => {
       saved.resolve()
       await publish.promise
     }
-    const second = session.handleUserMessage('请继续')
+    const second = edit.startMain()
     await Promise.race([saved.promise, Promise.resolve(second).then(reason => assert.fail(`快照尚未保存，回合已结束 ${reason}`))])
     try {
       const reopened = await store.open(journal.sessionId)
       assert.equal((await reopened.readCompactionSummary(1)).historySummary, '工作摘要')
-      const completed = reopened.initialViewEvents.filter(e => e.type === 'core-event' && e.event.type === 'context-compacted')
-      assert.equal(completed.length, 1)
-      assert.equal(events.some(e => e.type === 'context-compacted'), false)
+      assert.deepEqual(reopened.initialMessages.filter(m => userTurn(m)?.startsTurn).map(m => m.content), ['改写后的问题'])
+      assert.equal(events.some(e => e.type === 'context-compacted' && e.level === 'full'), false)
       session.abort('process-interruption')
     } finally {
       publish.resolve()
     }
     assert.equal(await second, 'aborted')
     assert.deepEqual(progress().map(e => e.status), ['running', 'stopped', 'running'])
-    assert.equal(events.filter(e => e.type === 'context-compacted').length, 1)
+    assert.deepEqual(events.filter(e => e.type === 'context-compacted').map(e => e.level), ['micro', 'full'])
     assert.equal(model.doStreamCalls.length, 0)
     await written
+    const latest = events.findLast(e => e.type === 'turn-start')!
+    await session.inspectLatestTurnEdit(latest.turnId)
     await assert.rejects(journal.readCompactionSummary(2), /找不到/)
+    const resumed = createSession(await store.open(journal.sessionId))
+    t.after(() => resumed.dispose())
+    const resend = await resumed.prepareLatestTurnEdit(latest.turnId, '重新打开后发出的新问题')
+    assert.equal(await resend.startMain(), 'completed')
+    assert.equal(model.doStreamCalls.length, 1)
+    const prompt = JSON.stringify(model.doStreamCalls[0]!.prompt)
+    assert.match(prompt, /工作摘要/)
+    assert.match(prompt, /重新打开后发出的新问题/)
+    assert.doesNotMatch(prompt, /第一次发言|改写后的问题/)
+    await written
   })
 
   it('协商协议、执行包和插话沿用原始用户任务，不推进近期附件窗口', async t => {
