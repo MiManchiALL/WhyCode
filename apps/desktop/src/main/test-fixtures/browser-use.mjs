@@ -24,7 +24,10 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'whycode-browser-file', privileg
 const timeout = setTimeout(() => { process.stderr.write('Browser fixture exceeded its 80 second deadline\n'); app.exit(1) }, 80_000)
 const server = createServer((_request, response) => response.end(`<!doctype html><html><head><meta charset="utf-8"><title>Browser fixture</title></head><body style="background:#bada55">
   <label>Username <input aria-label="Username" value=""></label>
-  <button onclick="document.querySelector('output').textContent=++window.count;document.body.style.background='rgb(100,150,200)'">Increment</button><output>0</output>
+  <button onclick="
+    document.querySelector('output').textContent = ++window.count;
+    document.body.style.background = window.count === 1 ? 'rgb(100,150,200)' : 'rgb(200,150,100)';
+  ">Increment</button><output>0</output>
   <span onclick="document.body.dataset.palette='chosen'">🎨</span>
   <script>window.count=0;</script></body></html>`))
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -43,7 +46,8 @@ app.whenReady().then(async () => {
     return workspaceLookups.get(runtimeId)?.()
   })
   agent.pages.register()
-  const win = new BrowserWindow({ show: false, width: 1000, height: 800,
+  // 固定原生窗口尺寸，仅调整侧栏高度，避免 Windows 在窗口尺寸变化后的首帧提交前将其隐藏。
+  const win = new BrowserWindow({ show: false, width: 1400, height: 1400,
     webPreferences: { preload: path.join(directory, 'preload.cjs'), webviewTag: true, sandbox: true, contextIsolation: true } })
   guests.bind(win)
   const rendererFailures = []
@@ -120,9 +124,7 @@ app.whenReady().then(async () => {
   assert.ok(textClick.text.startsWith('[]'), '快照省略无名称的布局容器')
   assert.equal(await originalGuest.executeJavaScript('document.body.dataset.palette'), 'chosen', '文字引用点击其所属真实元素')
   await checkBrowserObservation(run, originalGuest)
-  // 高侧栏属于展开窗口；保持不可见且不激活，建立与实际窗口大小一致的原生表面。
   win.setOpacity(0)
-  win.setSize(1400, 1400)
   win.showInactive()
   await execute('fixture.tall(true)')
   await until(() => originalGuest.executeJavaScript('innerHeight>1000'), 'tall viewport fills panel')
@@ -138,7 +140,6 @@ app.whenReady().then(async () => {
   assert.equal(layout[0], layout[1], '网页填满容器，不留底部白条')
   await originalGuest.executeJavaScript('document.getElementById("bottom-marker").remove()')
   await execute('fixture.tall(false)')
-  win.setSize(1000, 800)
   await until(() => originalGuest.executeJavaScript('innerHeight===800'), 'default viewport')
   assert.equal(win.isFocused(), false, '高视口捕获不抢焦点')
   win.hide()
@@ -204,12 +205,14 @@ app.whenReady().then(async () => {
   await until(() => !guests.get(personal.id), 'close personal view')
   assert.equal(agent.pages.signal(agent.pages.current('one')).aborted, false, '关闭用户界面不停止 Agent')
   await execute('fixture.session("beta")')
-  await until(() => !guests.get(personal.id), 'ordinary page released on switch')
+  await until(() => execute(`fixture.state().tabs.length === 0 && !!document.querySelector('[inert] [aria-label="Agent 浏览器"] webview')`), 'Agent page in background session')
   assert.ok(!originalGuest.isDestroyed())
   const background = await run('one', 'const s=await browser.snapshot(); await browser.click({ref:s.nodes.find(n=>n.role===\'button\').ref}); image(await browser.screenshot());')
   assert.equal(background.isError, false, background.text)
   assert.equal(await originalGuest.executeJavaScript('document.querySelector("output").textContent'), '2')
-  assert.ok(background.images[0].bytes.length > 1000)
+  const backgroundBitmap = nativeImage.createFromBuffer(background.images[0].bytes).toBitmap()
+  assert.deepEqual([...backgroundBitmap.subarray(-4, -1)], [100, 150, 200], '后台截图包含第二次点击后的画面')
+  assert.equal(win.isVisible(), false, '后台截图保持宿主窗口隐藏')
   const other = await agent.forRuntime('beta').execute(`await browser.open({url:${JSON.stringify(url)}})`, {
     turnId: 'other', toolCallId: 'other', abortSignal: new AbortController().signal,
   })
