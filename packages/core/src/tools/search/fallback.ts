@@ -1,8 +1,9 @@
 import ignore from 'ignore'
 import { Minimatch } from 'minimatch'
-import type { WorkspaceDirent, WorkspaceIO } from '../../workspace/io.ts'
+import { localWorkspaceIO, type WorkspaceDirent, type WorkspaceIO } from '../../workspace/io.ts'
 import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
 import { IGNORED_DIRS } from '../fs-utils.ts'
+import type { ToolContext } from '../tool.ts'
 
 export function fileGlob(pattern: string): Minimatch {
   const path = pattern.replaceAll('\\', '/')
@@ -48,8 +49,10 @@ export function incompleteScan(scan: ScanStatus, large = 0): string | undefined 
   return reasons.length ? `搜索不完整：${reasons.join('，')}` : undefined
 }
 
-/** 逐目录排序，按需交付文件。Grep 继承项目内的 ignore 规则，Glob 仅排除固定目录。 */
-export async function* walkSearchFiles(root: string, signal: AbortSignal, io: WorkspaceIO, status: ScanStatus, projectDir?: string): AsyncGenerator<string> {
+/** 按目录排序遍历。启用忽略规则时，子目录搜索也继承项目内上层目录的规则。 */
+export async function* walkSearchFiles(root: string, gitignore: boolean, status: ScanStatus, ctx: ToolContext): AsyncGenerator<string> {
+  const { projectDir, abortSignal: signal } = ctx
+  const io = ctx.workspaceIO ?? localWorkspaceIO
   const { relative, dirname, join, isAbsolute } = io.path
   let directories = 0
   let files = 0
@@ -62,18 +65,27 @@ export async function* walkSearchFiles(root: string, signal: AbortSignal, io: Wo
     })
   }
   let inherited: IgnoreFile[] = []
-  if (projectDir) {
+  if (gitignore) {
     const relativeRoot = relative(projectDir, root)
     if (!isAbsolute(relativeRoot) && relativeRoot !== '..' && !relativeRoot.startsWith('..' + io.path.sep)) {
       const ancestors: string[] = []
       for (let dir = root; relative(projectDir, dir); dir = dirname(dir)) ancestors.push(dirname(dir))
       for (const dir of ancestors.reverse()) inherited = await directoryRules(io, dir, inherited, await entriesAt(dir), signal)
+      // rg 从显式指定的目录开始遍历。ignore.test 会重查祖先，因此放行到起点为止的目录层级。
+      // 实际枚举的条目都比起点更深，仍由原来的规则决定。
+      for (const { directory, rules } of inherited) {
+        const path = relative(directory, root).replaceAll('\\', '/')
+        if (rules.ignores(path + '/')) {
+          const depth = path.split('/').length
+          rules.add(Array.from({ length: depth }, (_, index) => '!' + '/*'.repeat(index + 1) + '/'))
+        }
+      }
     }
   }
   async function* visit(directory: string, parentRules: IgnoreFile[]): AsyncGenerator<string> {
     if (++directories > 20_000) { status.limited = true; return }
     const entries = await entriesAt(directory)
-    const rules = projectDir ? await directoryRules(io, directory, parentRules, entries, signal) : parentRules
+    const rules = gitignore ? await directoryRules(io, directory, parentRules, entries, signal) : parentRules
     entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
     for (const entry of entries) {
       signal.throwIfAborted()

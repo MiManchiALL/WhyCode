@@ -11,10 +11,10 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024
 const READ_BATCH_SIZE = 16
 
 export async function fallbackGrep(
-  scope: { root: string; onlyFile?: string; include?: Minimatch },
+  scope: { root: string; onlyFile?: string; include?: Minimatch; gitignore: boolean },
   options: GrepOptions, page: SearchPage, ctx: ToolContext,
 ) {
-  const { root, onlyFile, include } = scope
+  const { root, onlyFile, include, gitignore } = scope
   const { projectDir, abortSignal: signal } = ctx
   const io = ctx.workspaceIO ?? localWorkspaceIO
   const status = { limited: false, unreadable: 0 }
@@ -33,7 +33,7 @@ export async function fallbackGrep(
     }
   }
   async function* batches() {
-    const files = onlyFile ? [onlyFile] : walkSearchFiles(root, signal, io, status, projectDir)
+    const files = onlyFile ? [onlyFile] : walkSearchFiles(root, gitignore, status, ctx)
     let paths: string[] = []
     const readBatch = async () => {
       const files: SearchFile[] = []

@@ -23,11 +23,12 @@ describe('BTW 独立侧对话', () => {
   it('Main 与 BTW 续轮只收到参数诊断，批内成功结果仍与原调用配对', async () => {
     const invalid = [
       { toolName: 'ReadFile', input: { path: 'a.txt', offset: 0 } },
-      { toolName: 'Grep', input: { pattern: 'x', limit: 0 } },
-      { toolName: 'Glob', input: { pattern: '*.ts', limit: 1_001 } },
+      { toolName: 'Grep', input: { pattern: 'x', gitignore: 'false' } },
+      { toolName: 'Glob', input: { pattern: '*.ts', offset: -1 } },
       { toolName: 'EditFile', input: { edits: [{ path: 'a.txt', oldText: 'x'.repeat(1_000),
         newText: 'y'.repeat(1_000), replaceAll: 'yes' }] } },
       { toolName: 'ListDir', input: { path: '.', limit: 1 } },
+      { toolName: 'ListDir', toolCallId: 'large-page', input: { path: '.', limit: 2_001 } },
       { toolName: 'ListDir', toolCallId: 'bad-json', input: '{!' },
     ]
     for (const mode of ['main', 'btw']) {
@@ -39,12 +40,13 @@ describe('BTW 独立侧对话', () => {
       const results = model.doStreamCalls[1]!.prompt.flatMap(m => m.role === 'tool' ? m.content : [])
       const outputs = new Map(results.flatMap(p => p.type === 'tool-result' ? [[p.toolCallId, p.output] as const] : []))
       for (const [tool, reason] of [
-        ['ReadFile', 'offset 至少为 1，收到 0。'], ['Grep', 'limit 至少为 1，收到 0。'],
-        ['Glob', 'limit 最大为 1000，收到 1001。'], ['EditFile', 'edits[0].replaceAll 应为布尔值，收到字符串。'],
+        ['ReadFile', 'offset 至少为 1，收到 0。'], ['Grep', 'gitignore 应为布尔值，收到字符串。'],
+        ['Glob', 'offset 至少为 0，收到 -1。'], ['EditFile', 'edits[0].replaceAll 应为布尔值，收到字符串。'],
       ]) {
         assert.deepEqual(outputs.get('btw-' + tool), { type: 'error-text', value: reason })
       }
       assert.equal(outputs.get('btw-ListDir')?.type, 'text')
+      assert.deepEqual(outputs.get('large-page'), { type: 'error-text', value: 'limit 最大为 2000，收到 2001。' })
       assert.deepEqual(outputs.get('bad-json'), { type: 'error-text', value: '工具参数必须是有效的 JSON。' })
     }
   })

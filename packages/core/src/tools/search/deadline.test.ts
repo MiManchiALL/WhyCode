@@ -35,10 +35,15 @@ it('Glob 跳过超过 1 MiB 的已读前缀后仍给出当前页和正确续页�
     })
     return child
   } }
-  const result = await globTool.execute({ pattern: '*.txt', offset: 5_200, limit: 2 }, {
+  const result = await globTool.execute({ pattern: '*.txt', offset: 5_200 }, {
     projectDir: tmpdir(), workspaceIO: io, additionalDirs: [], abortSignal: new AbortController().signal,
   })
-  assert.equal(result.data, `${name(5_200)}\n${name(5_201)}\n[用 offset=5202 继续]`)
+  const rows = result.data.split('\n')
+  const continuation = rows.pop()
+  assert.ok(Buffer.byteLength(result.data) <= 32 * 1024)
+  assert.ok(rows.length > 0 && rows.length < 200)
+  assert.deepEqual(rows, Array.from({ length: rows.length }, (_, n) => name(5_200 + n)))
+  assert.equal(continuation, `[用 offset=${5_200 + rows.length} 继续]`)
 })
 
 for (const tool of [globTool, grepTool]) {

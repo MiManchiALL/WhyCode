@@ -44,14 +44,14 @@ describe('搜索无 ripgrep 回退', () => {
     assert.equal(partial.isError, false)
     assert.equal(partial.data, '[搜索不完整：1 个文件超过 2 MiB]')
   })
-  it('跨文件批次分页只跳过一次，连续匹配和上下文分别标记', async () => {
+  it('跨文件批次分页只跳过一次，连续匹配保留原行号', async () => {
     const directory = join(root, 'batch')
     await mkdir(directory)
     for (let n = 0; n < 20; n++) {
       await writeFile(join(directory, `${String(n).padStart(2, '0')}.txt`), 'before\nmatch\nmatch\nafter\n')
     }
-    const result = await grepTool.execute({ path: 'batch', pattern: 'match', context: 1, offset: 68, limit: 4 }, ctx)
-    assert.equal(result.data, 'batch/17.txt\n1-before\n2:match\n3:match\n4-after\n[用 offset=72 继续]')
+    const result = await grepTool.execute({ path: 'batch', pattern: 'match', offset: 35 }, ctx)
+    assert.deepEqual(result.data.split('\n'), ['batch/17.txt:3:match', 'batch/18.txt', '2:match', '3:match', 'batch/19.txt', '2:match', '3:match'])
   })
   it('basename 模式匹配子目录，include 在读文件之前过滤', async () => {
     await writeFile(join(root, 'src', 'ignored.bin'), Buffer.alloc(100_000, 1))
@@ -79,10 +79,10 @@ describe('搜索无 ripgrep 回退', () => {
     assert.equal(result.isError, true)
     assert.match(result.data, /搜索超时/)
   })
-  it('回退正则与纯文本语义分离，并显示无效正则错误', async () => {
-    await writeFile(join(root, 'literal.txt'), '[a].* needle')
-    const result = await grepTool.execute({ pattern: '[a].*', literal: true, include: 'literal.txt' }, ctx)
-    assert.match(result.data, /literal.txt:1:\[a\]\.\*/)
+  it('转义正则可搜索特殊字符，无效正则返回语法错误', async () => {
+    await writeFile(join(root, 'literal.txt'), 'a plain match\n[a].* needle')
+    const result = await grepTool.execute({ pattern: '\\[a\\]\\.\\*', include: 'literal.txt' }, ctx)
+    assert.equal(result.data, 'literal.txt:2:[a].* needle')
     await assert.rejects(grepTool.execute({ pattern: '[', include: 'missing.txt' }, ctx), /regular expression/i)
     await assert.rejects(grepTool.execute({ pattern: 'a'.repeat(12_000) + '[', path: 'literal.txt' }, ctx),
       error => error instanceof Error && error.message.length < 100 && /unterminated character class/i.test(error.message))

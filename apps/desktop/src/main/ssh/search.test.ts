@@ -25,6 +25,8 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   await writeFile(join(env.root, 'project/target.png'), 'needle in image filename fixture')
   await writeFile(join(env.root, 'project/nested/target.png'), 'nested')
   await writeFile(join(env.root, 'project/nested/code.ts'), 'const needle = "中文"\n')
+  await writeFile(join(env.root, 'project/.gitignore'), 'ignored.ts\n')
+  await writeFile(join(env.root, 'project/ignored.ts'), 'needle ignored by project\n')
   await writeFile(join(env.root, 'project/-options.txt'), 'needle single file\n')
   await writeFile(join(env.root, "project/quote'file.txt"), 'needle quoted file\n')
   const fs = { ...host.io.fs,
@@ -36,10 +38,14 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   assert.equal(glob.data, 'nested/target.png\ntarget.png')
   const grep = await grepTool.execute({ pattern: 'needle', include: '*.ts' }, searchCtx)
   assert.equal(grep.data, 'nested/code.ts:1:const needle = "中文"')
+  assert.equal((await globTool.execute({ pattern: 'ignored.ts' }, searchCtx)).data, '（无匹配文件）')
+  assert.equal((await globTool.execute({ pattern: 'ignored.ts', gitignore: false }, searchCtx)).data, 'ignored.ts')
+  const files = await grepTool.execute({ pattern: 'needle', include: '*.ts', gitignore: false, outputMode: 'files_with_matches' }, searchCtx)
+  assert.deepEqual(files.data.split('\n'), ['ignored.ts', 'nested/code.ts'])
   for (const path of ['-options.txt', "quote'file.txt"]) {
     assert.match((await grepTool.execute({ pattern: 'needle', path }, searchCtx)).data, /:1:needle/)
   }
-  const injection = await grepTool.execute({ pattern: '$(touch injected)', literal: true }, searchCtx)
+  const injection = await grepTool.execute({ pattern: '$(touch injected)' }, searchCtx)
   assert.equal(injection.data, '（无匹配）')
   await assert.rejects(access(join(env.root, 'project/injected')), { code: 'ENOENT' })
   await assert.rejects(grepTool.execute({ pattern: '[' }, searchCtx), /unclosed character class/)
@@ -47,10 +53,13 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
     await assert.rejects(tool.execute({ pattern: 'needle', path: 'missing/subdir' }, searchCtx),
       { message: '搜索路径不存在' })
   }
-  const first = await globTool.execute({ pattern: '*.txt', limit: 1 }, searchCtx)
-  assert.match(first.data, /offset=1/)
-  const next = await globTool.execute({ pattern: '*.txt', limit: 1, offset: 1 }, searchCtx)
-  assert.notEqual(first.data.split('\n')[0], next.data.split('\n')[0])
+  const pages = join(env.root, 'project/pages')
+  await mkdir(pages)
+  for (let n = 0; n <= 200; n++) await writeFile(join(pages, String(n).padStart(3, '0') + '.txt'), '')
+  const first = await globTool.execute({ path: 'pages', pattern: '*.txt' }, searchCtx)
+  assert.match(first.data, /\[用 offset=200 继续\]$/)
+  const next = await globTool.execute({ path: 'pages', pattern: '*.txt', offset: 200 }, searchCtx)
+  assert.equal(next.data, 'pages/200.txt')
 
   const child = host.processes.spawn({ executable: '/bin/sh', args: ['-c', 'exec sleep 60'] }, env.project)
   const closed = once(child, 'close')

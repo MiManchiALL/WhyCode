@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
-import type { ToolContext } from './tool.ts'
+import { asSchema } from 'ai'
+import { validateToolInput, type ToolContext } from './tool.ts'
 import { globTool, listDirTool } from './list-glob/index.ts'
 import { grepTool } from './grep/index.ts'
 import { localWorkspaceIO } from '../workspace/io.ts'
@@ -35,6 +36,19 @@ async function fixture(): Promise<{ root: string; ctx: ToolContext }> {
 }
 
 describe('高性能搜索工具', () => {
+  it('模型可见的搜索参数只要求 pattern，页长由工具决定', async () => {
+    const grep = await asSchema(grepTool.inputSchema).jsonSchema
+    const glob = await asSchema(globTool.inputSchema).jsonSchema
+    assert.deepEqual(Object.keys(grep.properties ?? {}).sort(), ['caseSensitive', 'gitignore', 'include', 'offset', 'outputMode', 'path', 'pattern'])
+    assert.deepEqual(Object.keys(glob.properties ?? {}).sort(), ['gitignore', 'offset', 'path', 'pattern'])
+    assert.deepEqual(grep.required, ['pattern'])
+    assert.deepEqual(glob.required, ['pattern'])
+    for (const option of [{ limit: 1 }, { context: 1 }, { literal: true }]) {
+      assert.equal((await validateToolInput(grepTool, { pattern: 'x', ...option })).success, false)
+    }
+    assert.equal((await validateToolInput(globTool, { pattern: '*', limit: 1 })).success, false)
+  })
+
   for (const fallback of [false, true]) {
     it(`${fallback ? '回退' : '原生'} Glob 区分根目录缺失、路径是文件和没有匹配项`, async () => {
       const { ctx } = await fixture()
@@ -52,40 +66,75 @@ describe('高性能搜索工具', () => {
       if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
       const base = 'packages/example/source'
       await mkdir(join(root, base, 'nested'), { recursive: true })
-      for (const name of ['a', 'b', 'nested/c', 'nested/d', 'y', 'z']) {
-        await writeFile(join(root, base, name + '.ts'), '')
+      const names = Array.from({ length: 196 }, (_, n) => String(n).padStart(3, '0') + '.ts')
+      for (const name of [...names, 'nested/a.ts', 'nested/b.ts', 'nested/c.ts', 'nested/d.ts', 'nested/e.ts', 'nested/f.ts', 'y.ts', 'z.ts']) {
+        await writeFile(join(root, base, name), '')
       }
-      const next = await globTool.execute({ path: base, pattern: '*.ts', limit: 5 }, ctx)
-      assert.equal(next.data, [
-        '# ' + base + '/', 'a.ts', 'b.ts', '## nested/', 'c.ts', 'd.ts',
-        '# ' + base + '/', 'y.ts', '[用 offset=5 继续]',
-      ].join('\n'))
-      assert.equal((await globTool.execute({ path: base, pattern: '*.ts', offset: 5 }, ctx)).data, base + '/z.ts')
-      const middle = await globTool.execute({ path: base, pattern: '*.ts', offset: 2, limit: 3 }, ctx)
-      assert.equal(middle.data, ['# ' + base + '/', '## nested/', 'c.ts', 'd.ts',
-        '# ' + base + '/', 'y.ts', '[用 offset=5 继续]'].join('\n'))
+      const first = await globTool.execute({ path: base, pattern: '*.ts' }, ctx)
+      assert.deepEqual(first.data.split('\n'), ['# ' + base + '/', ...names, '## nested/', 'a.ts', 'b.ts', 'c.ts', 'd.ts', '[用 offset=200 继续]'])
+      const next = await globTool.execute({ path: base, pattern: '*.ts', offset: 200 }, ctx)
+      assert.deepEqual(next.data.split('\n'), ['# ' + base + '/', '## nested/', 'e.ts', 'f.ts', '# ' + base + '/', 'y.ts', 'z.ts'])
     })
 
-    it(`${fallback ? '回退' : '原生'}搜索中 include 与各级 ignore 取交集，明确指定文件仍可读`, async () => {
+    it(`${fallback ? '回退' : '原生'}目录搜索按 gitignore 开关应用各级规则，明确指定文件仍可读`, async () => {
       const { ctx, root } = await fixture()
       if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
       await writeFile(join(root, '.gitignore'), 'git.ts\n')
       await writeFile(join(root, '.ignore'), '*.drop.ts\nkeep.ts\n')
       await writeFile(join(root, '.rgignore'), '!keep.ts\n')
       await writeFile(join(root, 'src', 'nested', '.ignore'), '!exception.drop.ts\n')
-      for (const name of ['git.ts', 'a.drop.ts', 'exception.drop.ts', 'keep.ts', '.hidden.ts', 'miss.txt']) {
+      await mkdir(join(root, '.git', 'info'), { recursive: true })
+      await writeFile(join(root, '.git', 'info', 'exclude'), 'excluded.ts\n')
+      const names = ['.hidden.ts', 'a.drop.ts', 'exception.drop.ts', 'excluded.ts', 'git.ts', 'keep.ts']
+      for (const name of [...names, 'miss.txt']) {
         await writeFile(join(root, 'src', 'nested', name), 'marker\n')
       }
-      const paths = ['.hidden.ts', 'exception.drop.ts', 'keep.ts'].map(n => 'src/nested/' + n)
-      for (const [path, include] of [['.', 'src/**/*.ts'], ['src', '*.ts']] as const) {
-        const result = await grepTool.execute({ path, include, pattern: 'marker', outputMode: 'files_with_matches' }, ctx)
-        assert.deepEqual(result.data.split('\n'), paths)
+      for (const gitignore of [undefined, false]) {
+        const expected = gitignore === false ? names : ['.hidden.ts', 'exception.drop.ts', 'keep.ts']
+        const paths = expected.map(name => 'src/nested/' + name)
+        for (const [path, include] of [['.', 'src/nested/*.ts'], ['src/nested', '*.ts']] as const) {
+          const grep = await grepTool.execute({ path, include, pattern: 'marker', outputMode: 'files_with_matches', gitignore }, ctx)
+          assert.deepEqual(grep.data.split('\n'), paths)
+          const glob = await globTool.execute({ path, pattern: include, gitignore }, ctx)
+          assert.deepEqual(glob.data.split('\n'), ['# src/nested/', ...expected])
+        }
       }
       const explicit = await grepTool.execute({ path: 'src/nested/git.ts', pattern: 'marker' }, ctx)
       assert.equal(explicit.data, 'src/nested/git.ts:1:marker')
-      assert.match((await globTool.execute({ pattern: 'git.ts' }, ctx)).data, /src\/nested\/git\.ts/)
       assert.equal((await globTool.execute({ path: 'src', pattern: './*.ts' }, ctx)).data, 'src/alpha.ts')
       assert.equal((await grepTool.execute({ path: 'src', pattern: 'marker', include: './*.ts' }, ctx)).data, '（无匹配）')
+    })
+
+    it(`${fallback ? '回退' : '原生'} Grep 按匹配行或文件每页返回 250 条`, async () => {
+      const { root, ctx } = await fixture()
+      if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
+      const names = Array.from({ length: 251 }, (_, n) => String(n).padStart(3, '0') + '.txt')
+      for (const name of names) await writeFile(join(root, name), 'hit hit\nother\nhit\n')
+      for (const outputMode of ['files_with_matches', 'count'] as const) {
+        const query = { pattern: 'hit', outputMode }
+        const entries = outputMode === 'count' ? names.map(name => name + ':2') : names
+        const first = await grepTool.execute(query, ctx)
+        assert.deepEqual(first.data.split('\n'), [...entries.slice(0, 250), '[用 offset=250 继续]'])
+        assert.equal((await grepTool.execute({ ...query, offset: 250 }, ctx)).data, entries[250])
+      }
+      const first = await grepTool.execute({ pattern: 'hit' }, ctx)
+      const rows = names.slice(0, 125).flatMap(name => [name, '1:hit hit', '3:hit'])
+      assert.deepEqual(first.data.split('\n'), [...rows, '[用 offset=250 继续]'])
+      assert.equal((await grepTool.execute({ pattern: 'hit', offset: 500 }, ctx)).data, '250.txt\n1:hit hit\n3:hit')
+    })
+
+    it(`${fallback ? '回退' : '原生'}显式目录作为搜索起点，内部文件仍遵循项目规则`, async () => {
+      const { root, ctx } = await fixture()
+      if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
+      const path = 'logs/inner'
+      await mkdir(join(root, path), { recursive: true })
+      await writeFile(join(root, '.gitignore'), 'logs/\nlogs/**/private.log\n')
+      for (const name of ['debug.log', 'private.log']) await writeFile(join(root, path, name), 'trace')
+      assert.equal((await globTool.execute({ pattern: '*.log' }, ctx)).data, '（无匹配文件）')
+      assert.equal((await globTool.execute({ path, pattern: '*.log' }, ctx)).data, path + '/debug.log')
+      assert.equal((await grepTool.execute({ path, pattern: 'trace' }, ctx)).data, path + '/debug.log:1:trace')
+      const both = await globTool.execute({ path, pattern: '*.log', gitignore: false }, ctx)
+      assert.deepEqual(both.data.split('\n'), [path + '/debug.log', path + '/private.log'])
     })
 
     it(`${fallback ? '回退' : '原生'}搜索的深分页按实际显示行数推进，UTF-8 回包有界`, async () => {
@@ -96,7 +145,7 @@ describe('高性能搜索工具', () => {
       await writeFile(join(root, path), (line + '\n').repeat(5_000))
       let offset = 4_700
       while (offset < 5_000) {
-        const result = await grepTool.execute({ path, pattern: '中', offset, limit: 1_000 }, ctx)
+        const result = await grepTool.execute({ path, pattern: '中', offset }, ctx)
         assert.equal(result.isError, false)
         assert.ok(Buffer.byteLength(result.data) <= 32 * 1024)
         const rows = result.data.split('\n')
@@ -125,30 +174,24 @@ describe('高性能搜索工具', () => {
       await writeFile(join(root, 'src', 'build-tools', 'target.txt'), 'needle source\n')
       if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
 
-      const glob = await globTool.execute({ pattern: '**/target.txt' }, ctx)
+      const glob = await globTool.execute({ pattern: '**/target.txt', gitignore: false }, ctx)
       assert.equal(glob.isError, false)
       assert.deepEqual(glob.data.split('\n'), ['src/build-tools/target.txt', 'target.txt'])
-      const grep = await grepTool.execute({ pattern: 'needle', include: '**/target.txt' }, ctx)
+      const grep = await grepTool.execute({ pattern: 'needle', include: '**/target.txt', gitignore: false }, ctx)
       assert.equal(grep.isError, false)
       assert.deepEqual(grep.data.split('\n'), ['src/build-tools/target.txt:1:needle source', 'target.txt:1:needle root'])
     })
   }
 
-  it('Glob 支持搜索根目录、brace 模式、分页并跳过依赖目录', async () => {
+  it('Glob 的 brace 模式支持递归及相对于搜索目录的匹配', async () => {
     const { ctx } = await fixture()
-    const first = await globTool.execute(
-      { pattern: '**/*.{ts,tsx}', path: 'src', limit: 1 },
-      ctx,
-    )
-    assert.match(first.data, /src\//)
-    assert.match(first.data, /offset=1/)
-    assert.doesNotMatch(first.data, /node_modules/)
-
-    const second = await globTool.execute(
-      { pattern: '**/*.{ts,tsx}', path: 'src', limit: 2, offset: 1 },
-      ctx,
-    )
-    assert.match(second.data, /\.tsx?/) 
+    const recursive = await globTool.execute({ pattern: '**/*.{ts,tsx}', path: 'src' }, ctx)
+    assert.deepEqual(recursive.data.split('\n'), ['src/alpha.ts', 'src/nested/beta.tsx'])
+    const direct = await globTool.execute({ pattern: 'src/*.{ts,tsx}' }, ctx)
+    assert.equal(direct.data, 'src/alpha.ts')
+    for (const pattern of ['{alpha.ts,archive:old}', 'alph{a..c}.ts', '[[:alpha:]]*.ts']) {
+      assert.equal((await globTool.execute({ pattern, path: 'src' }, ctx)).data, 'src/alpha.ts')
+    }
   })
 
   it('只将指定搜索路径的缺失归为找不到文件，保留权限与可执行文件故障', async () => {
@@ -168,7 +211,7 @@ describe('高性能搜索工具', () => {
     }
   })
 
-  it('Grep 支持内容、上下文、大小写、文件列表与计数模式', async () => {
+  it('Grep 可按文件类型和大小写匹配，只返回匹配行', async () => {
     const { ctx } = await fixture()
     const content = await grepTool.execute(
       {
@@ -176,29 +219,11 @@ describe('高性能搜索工具', () => {
         path: 'src',
         include: '*.{ts,tsx}',
         caseSensitive: false,
-        context: 1,
         outputMode: 'content',
-        limit: 20,
       },
       ctx,
     )
-    assert.match(content.data, /src\/alpha\.ts\n1-export const Alpha = 1\n2:needle here\n3-context line/)
-    assert.match(content.data, /src\/nested\/beta\.tsx:1:const beta/)
-    assert.match(content.data, /context line/)
-    assert.doesNotMatch(content.data, /plain\.txt/)
-
-    const files = await grepTool.execute(
-      { pattern: 'needle', literal: true, outputMode: 'files_with_matches' },
-      ctx,
-    )
-    assert.match(files.data, /src\/alpha\.ts/)
-    assert.doesNotMatch(files.data, /node_modules/)
-
-    const counts = await grepTool.execute(
-      { pattern: 'needle', literal: true, outputMode: 'count' },
-      ctx,
-    )
-    assert.match(counts.data, /src\/alpha\.ts:1/)
+    assert.deepEqual(content.data.split('\n'), ['src/alpha.ts:2:needle here', 'src/nested/beta.tsx:1:const beta = "Needle"'])
   })
   it('ListDir 区分空目录和非空目录的页尾', async () => {
     const { ctx, root } = await fixture()

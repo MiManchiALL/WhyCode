@@ -11,7 +11,20 @@ const MAX_STDERR_CHARS = 4_000
 const MAX_LINE_CHARS = 64 * 1024
 
 // 匹配任意深度的目录本身才能在进入前剪枝；仅排除其内容仍会读取目录。
-export const SEARCH_EXCLUSIONS = [...IGNORED_DIRS].flatMap(dir => ['--glob', `!**/${dir}`])
+const SEARCH_EXCLUSIONS = [...IGNORED_DIRS].flatMap(dir => ['--glob', `!**/${dir}`])
+
+export function ripgrepFileArgs(gitignore: boolean, pattern?: string): string[] {
+  const args = ['--hidden', gitignore ? '--no-require-git' : '--no-ignore', '--sort', 'path', ...SEARCH_EXCLUSIONS]
+  if (!pattern) return args
+  // 正向 --glob 会覆盖忽略规则。--type 只预筛两边语法一致的文件名通配与简单枚举。
+  // 冒号是类型定义分隔符，字符类和范围展开统一交给相对路径的 minimatch 匹配。
+  const leaf = pattern.slice(pattern.lastIndexOf('/') + 1)
+  const simpleGlob = leaf.replace(/\{[\w.-]+(?:,[\w.-]+)+\}/g, '*')
+  if (simpleGlob && !/[:{}[\]]/.test(simpleGlob)) {
+    args.push('--type-add', `whycode:${leaf}`, '--type', 'whycode')
+  }
+  return args
+}
 
 let ripgrepPathPromise: Promise<string | null> | null = null
 
