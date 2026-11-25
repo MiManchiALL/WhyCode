@@ -19,9 +19,11 @@ import { checkBrowserDialogs } from './browser-dialogs.mjs'
 import { checkBrowserKeyboard } from './browser-keyboard.mjs'
 
 const directory = process.env.WHYCODE_BROWSER_TEST_DIR
-app.setPath('userData', path.join(directory, 'profile'))
+const scenario = process.argv.at(-1)
+assert.ok(scenario === 'navigation' || scenario === 'lifecycle', '需要指定网页测试场景')
+app.setPath('userData', path.join(directory, `profile-${scenario}`))
 protocol.registerSchemesAsPrivileged([{ scheme: 'whycode-browser-file', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
-const timeout = setTimeout(() => { process.stderr.write('Browser fixture exceeded its 80 second deadline\n'); app.exit(1) }, 80_000)
+const timeout = setTimeout(() => { process.stderr.write(`Browser ${scenario} exceeded its 80 second deadline\n`); app.exit(1) }, 80_000)
 const server = createServer((_request, response) => response.end(`<!doctype html><html><head><meta charset="utf-8"><title>Browser fixture</title></head><body style="background:#bada55">
   <label>Username <input aria-label="Username" value=""></label>
   <button onclick="
@@ -46,9 +48,10 @@ app.whenReady().then(async () => {
     return workspaceLookups.get(runtimeId)?.()
   })
   agent.pages.register()
-  // 固定原生窗口尺寸，仅调整侧栏高度，避免 Windows 在窗口尺寸变化后的首帧提交前将其隐藏。
-  const win = new BrowserWindow({ show: false, width: 1400, height: 1400,
+  const win = new BrowserWindow({ show: false,
     webPreferences: { preload: path.join(directory, 'preload.cjs'), webviewTag: true, sandbox: true, contextIsolation: true } })
+  // Windows 会按桌面工作区裁小初始窗口。在挂载网页前设置实际内容区，后续只调整侧栏高度。
+  win.setContentSize(1400, 1400)
   guests.bind(win)
   const rendererFailures = []
   win.webContents.on('console-message', event => { if (event.level === 'error') rendererFailures.push(event.message) })
@@ -61,6 +64,18 @@ app.whenReady().then(async () => {
   win.setOpacity(0)
   win.setSkipTaskbar(true)
   win.showInactive()
+  const context = { win, run, finish, execute, agent, guests, workspaceLookups }
+  if (scenario === 'navigation') await checkNavigation(context)
+  else await checkLifecycle(context)
+  assert.deepEqual(rendererFailures, [], '网页操作不得产生未捕获异常或宿主崩溃')
+  win.destroy()
+  clearTimeout(timeout)
+  server.close()
+  process.stdout.write(`browser ${scenario} passed\n`)
+  app.exit(0)
+}).catch(error => { process.stderr.write(`${error.stack}\n`); server.close(); app.exit(1) })
+
+async function checkNavigation({ win, run, finish, execute, agent, guests, workspaceLookups }) {
   const coldFile = path.join(directory, 'cold.html')
   await writeFile(coldFile, '<!doctype html><title>Cold file</title><body style="background:#bada55"><button>Ready</button>')
   const cold = await run('cold', `await browser.open({url:${JSON.stringify(pathToFileURL(coldFile).href)}}); text(await browser.snapshot()); image(await browser.screenshot());`)
@@ -97,6 +112,9 @@ app.whenReady().then(async () => {
   await checkBrowserTabIndicators({ run, finish, execute, until, agent, guests, url, win })
   await execute('fixture.session("alpha")')
   await until(() => execute('fixture.state().tabs.length===0'), 'clear cold descriptor')
+}
+
+async function checkLifecycle({ win, run, finish, execute, agent, guests }) {
   await execute(`fixture.open(${JSON.stringify(url)})`)
   await until(() => agent.pages.list('alpha').some(page => guests.get(page.id)?.getURL() === url), 'user page')
   const original = agent.pages.list('alpha')[0]
@@ -108,6 +126,12 @@ app.whenReady().then(async () => {
   assert.match(first.text, /user-draft/)
   assert.equal(agent.pages.current('one').surfaceId, original.id, '优先接管已有用户 DOM')
   await until(() => originalGuest.executeJavaScript('innerWidth===1280 && innerHeight===800'), 'fixed viewport')
+  const foreground = await run('one', `await browser.evaluate({expression:'document.body.style.background = "rgb(60,80,120)"'}); image(await browser.screenshot());`)
+  assert.equal(foreground.isError, false, foreground.text)
+  const foregroundPixel = nativeImage.createFromBuffer(foreground.images[0].bytes).toBitmap().subarray(-4, -1)
+  assert.deepEqual([...foregroundPixel], [120, 80, 60], '窗口隐藏前已绘制接管后的新画面')
+  win.hide()
+  win.setOpacity(1)
   const changed = await run('one', `const s=await browser.snapshot(); await browser.fill({ref:s.nodes.find(n=>n.role==='textbox').ref,value:'agent-draft'}); await browser.click({ref:s.nodes.find(n=>n.role==='button').ref}); image(await browser.screenshot());`)
   assert.equal(changed.isError, false, changed.text)
   assert.equal(changed.images.length, 1)
@@ -128,6 +152,13 @@ app.whenReady().then(async () => {
   win.showInactive()
   await execute('fixture.tall(true)')
   await until(() => originalGuest.executeJavaScript('innerHeight>1000'), 'tall viewport fills panel')
+  const layout = await execute(`(() => {
+    const view = document.querySelector('[aria-label="Agent 浏览器"] webview')
+    const { height, bottom } = view.getBoundingClientRect()
+    return { height, panelHeight: view.parentElement.getBoundingClientRect().height, bottom, hostHeight: innerHeight }
+  })()`)
+  assert.equal(layout.height, layout.panelHeight, '网页填满容器，不留底部白条')
+  assert.ok(layout.bottom <= layout.hostHeight, `高视口底边 ${layout.bottom} 超出宿主内容高度 ${layout.hostHeight}`)
   await originalGuest.executeJavaScript(`document.body.insertAdjacentHTML('beforeend','<div id="bottom-marker" style="position:fixed;bottom:0;left:0;right:0;height:10px;background:rgb(255,0,255)"></div>')`)
   const tall = await run('one', 'text(await browser.snapshot()); image(await browser.screenshot());')
   assert.equal(tall.isError, false, tall.text)
@@ -136,8 +167,6 @@ app.whenReady().then(async () => {
   const tallBitmap = nativeImage.createFromBuffer(tall.images[0].bytes).toBitmap()
   const bottomPixel = ((tallSize.height - 5) * tallSize.width + 100) * 4
   assert.deepEqual([...tallBitmap.subarray(bottomPixel, bottomPixel + 3)], [255, 0, 255], '完整捕获高视口底部，不拉伸旧画面')
-  const layout = await execute(`(() => {const view=document.querySelector('[aria-label="Agent 浏览器"] webview');return [view.getBoundingClientRect().height,view.parentElement.getBoundingClientRect().height]})()`)
-  assert.equal(layout[0], layout[1], '网页填满容器，不留底部白条')
   await originalGuest.executeJavaScript('document.getElementById("bottom-marker").remove()')
   await execute('fixture.tall(false)')
   await until(() => originalGuest.executeJavaScript('innerHeight===800'), 'default viewport')
@@ -316,10 +345,4 @@ app.whenReady().then(async () => {
   assert.equal(agent.pages.list('alpha').length, 0, '全部清理释放 Agent 网页')
   assert.equal((await run('five', `await browser.open({url:${JSON.stringify(url)}})`)).isError, true, '清理后旧 Turn 不能恢复写入')
   await finish('five')
-  assert.deepEqual(rendererFailures, [], '会话切换和网页销毁不得产生未捕获异常或宿主崩溃')
-  win.destroy()
-  clearTimeout(timeout)
-  server.close()
-  process.stdout.write('browser use passed\n')
-  app.exit(0)
-}).catch(error => { process.stderr.write(`${error.stack}\n`); server.close(); app.exit(1) })
+}
