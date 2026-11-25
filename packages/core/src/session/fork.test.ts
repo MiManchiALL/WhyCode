@@ -29,6 +29,7 @@ describe('SessionStore Fork', () => {
     const source = await store.create({
       workspace: localWorkspace('C:\\work\\fork'),
       modelId: 'test:model',
+      customSystemPrompt: { mode: 'append', content: '第一段\u2029第二段' },
     })
     await source.recordUserInput('分析这个问题', true)
     await source.recordTurnStart('turn-1', [message('user', '分析这个问题')])

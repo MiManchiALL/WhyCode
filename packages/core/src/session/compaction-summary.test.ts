@@ -24,9 +24,14 @@ it('按完整压缩序号读取原摘要，微压缩不计数，冷恢复后仍�
     await journal.recordSnapshot('compact', [history, prefix], undefined, undefined, {
       type: 'context-compacted', level: 'micro', preTokens: 40_000, postTokens: 35_000,
     })
+    const userText = '第一段\u2029第二段'
+    await journal.recordUserInput(userText, true)
+    await journal.recordTurnStart('turn-c', [{ role: 'user', content: userText }])
+    // 让同一条快照跨过多个 UTF-8 读取块，逐字核对重组后的摘要。
+    const secondHistory = '阶段 A 已完成\u2028阶段 B 待办📋\u2029'.repeat(5_000)
     await journal.recordSnapshot('compact', [createCompactSummaryMessage({
-      historySummary: '## 1. 历史任务\nA、B 均已完成', turnPrefixSummary: null, turnId: null,
-    })], undefined, undefined, {
+      historySummary: secondHistory, turnPrefixSummary: null, turnId: null,
+    })], 'turn-c', undefined, {
       type: 'context-compacted', level: 'full', preTokens: 45_000, postTokens: 12_000,
     })
 
@@ -40,7 +45,7 @@ it('按完整压缩序号读取原摘要，微压缩不计数，冷恢复后仍�
     assert.ok(Number.isFinite(Date.parse(first.timestamp)))
     assert.doesNotMatch(JSON.stringify(first), /保留尾部|PDF 引用与当前计划/)
     const second = await reopened.readCompactionSummary(2)
-    assert.equal(second.historySummary, '## 1. 历史任务\nA、B 均已完成')
+    assert.equal(second.historySummary, secondHistory)
     assert.equal(second.turnPrefixSummary, null)
     assert.equal(second.preTokens, 45_000)
     assert.equal(second.index, 2)
