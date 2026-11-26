@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access, mkdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { join } from 'node:path'
 import { it } from 'node:test'
@@ -24,6 +24,9 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   }
   await writeFile(join(env.root, 'project/target.png'), 'needle in image filename fixture')
   await writeFile(join(env.root, 'project/nested/target.png'), 'nested')
+  for (const [index, path] of ['target.png', 'build/target.png', 'nested/target.png'].entries()) {
+    await utimes(join(env.root, 'project', path), 1_700_000_000, 1_700_000_000 + index)
+  }
   await writeFile(join(env.root, 'project/nested/code.ts'), 'const needle = "中文"\n')
   await writeFile(join(env.root, 'project/.gitignore'), 'ignored.ts\n.cache/\n')
   await writeFile(join(env.root, 'project/ignored.ts'), 'needle ignored by project\n')
@@ -31,11 +34,12 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   await writeFile(join(env.root, "project/quote'file.txt"), 'needle quoted file\n')
   const fs = { ...host.io.fs,
     readdir: async () => assert.fail('不应逐层读取 SFTP 目录'),
+    lstat: async () => assert.fail('不应逐个查询远端文件的修改时间'),
     readFile: async () => assert.fail('不应下载源文件进行搜索'),
   }
   const searchCtx = { ...ctx, workspaceIO: { ...io, fs } }
   const glob = await globTool.execute({ pattern: 'target.png' }, searchCtx)
-  assert.equal(glob.data, 'build/target.png\nnested/target.png\ntarget.png')
+  assert.equal(glob.data, 'nested/target.png\nbuild/target.png\ntarget.png')
   const grep = await grepTool.execute({ pattern: 'needle', include: '*.ts' }, searchCtx)
   assert.equal(grep.data, 'build/code.ts:1:needle in build\nnested/code.ts:1:const needle = "中文"')
   assert.equal((await globTool.execute({ pattern: 'ignored.ts' }, searchCtx)).data, '（无匹配文件）')
@@ -55,11 +59,16 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   }
   const pages = join(env.root, 'project/pages')
   await mkdir(pages)
-  for (let n = 0; n <= 200; n++) await writeFile(join(pages, String(n).padStart(3, '0') + '.txt'), '')
+  for (let n = 0; n <= 200; n++) {
+    const path = join(pages, String(n).padStart(3, '0') + '.txt')
+    await writeFile(path, '')
+    await utimes(path, 1_700_000_000, 1_700_000_000 + n)
+  }
   const first = await globTool.execute({ path: 'pages', pattern: '*.txt' }, searchCtx)
+  assert.match(first.data, /^# pages\/\n200\.txt\n199\.txt\n/)
   assert.match(first.data, /\[用 offset=200 继续\]$/)
   const next = await globTool.execute({ path: 'pages', pattern: '*.txt', offset: 200 }, searchCtx)
-  assert.equal(next.data, 'pages/200.txt')
+  assert.equal(next.data, 'pages/000.txt')
 
   const child = host.processes.spawn({ executable: '/bin/sh', args: ['-c', 'exec sleep 60'] }, env.project)
   const closed = once(child, 'close')

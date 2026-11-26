@@ -2,7 +2,7 @@ import { localWorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { displayToolPath, resolveAllowed, rethrowTargetError } from '../fs-utils.ts'
-import { incompleteScan, walkSearchFiles } from '../search/fallback.ts'
+import { fallbackGlob } from '../search/fallback-glob.ts'
 import { fileGlob, gitignoreSchema } from '../search/file-filters.ts'
 import { ripgrepFileArgs, runRipgrepLines } from '../search/ripgrep.ts'
 import { withSearchDeadline } from '../search/deadline.ts'
@@ -59,7 +59,8 @@ export const globTool = buildTool({
   name: GLOB_TOOL_NAME,
   description: '按 glob 模式递归查找文件',
   prompt:
-    '在指定目录下递归查找路径符合 glob 模式的文件，结果按路径排序。有更多匹配文件时，末尾给出下一页的 `offset`。',
+    '在指定目录下递归查找路径符合 glob 模式的文件，按文件修改时间从新到旧排序。'
+    + `剩余匹配文件超过 ${GLOB_PAGE_SIZE} 个或本页内容过长时，末尾给出下一页的 \`offset\`。`,
   inputSchema: z.strictObject({
     pattern: z.string().min(1).describe(
       '相对于搜索目录的 glob 模式，支持 *、**、? 和 {a,b}。*.ts 匹配任意层级的 .ts 文件，src/*.ts 只匹配 src 本层，src/**/*.ts 匹配 src 本层及子目录中的 .ts 文件。',
@@ -81,26 +82,12 @@ export const globTool = buildTool({
       const page = new SearchPage(input.offset ?? 0, GLOB_PAGE_SIZE)
       const gitignore = input.gitignore ?? true
       const matcher = fileGlob(input.pattern)
-      const addMatch = (relativePath: string) => {
+      const args = ['--files', '--sortr', 'modified', ...ripgrepFileArgs(gitignore, matcher.pattern), '--', '.']
+      const native = await runRipgrepLines(args, root, ctx.abortSignal, relativePath => {
         const path = relativePath.replaceAll('\\', '/').replace(/^\.\//, '')
         return !matcher.match(path) || page.add(displayToolPath(ctx.projectDir, root, path, io))
-      }
-      const native = await runRipgrepLines(
-        ['--files', ...ripgrepFileArgs(gitignore, matcher.pattern), '--', '.'],
-        root,
-        ctx.abortSignal,
-        addMatch,
-        io,
-      )
-
-      let incomplete: string | undefined
-      if (!native) {
-        const status = { limited: false, unreadable: 0 }
-        for await (const path of walkSearchFiles(root, gitignore, status, ctx)) {
-          if (!addMatch(io.path.relative(root, path))) break
-        }
-        incomplete = incompleteScan(status)
-      }
+      }, io)
+      const incomplete = native ? undefined : await fallbackGlob(root, matcher, gitignore, page, ctx)
       return page.result('（无匹配文件）', incomplete, formatGlobPaths)
     })
   },

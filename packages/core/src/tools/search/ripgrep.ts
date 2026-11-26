@@ -14,7 +14,7 @@ const MAX_LINE_CHARS = 64 * 1024
 const SEARCH_EXCLUSIONS = SEARCH_EXCLUDED_DIRS.flatMap(dir => ['--glob', `!**/${dir}`])
 
 export function ripgrepFileArgs(gitignore: boolean, pattern?: string): string[] {
-  const args = ['--hidden', gitignore ? '--no-require-git' : '--no-ignore', '--sort', 'path', ...SEARCH_EXCLUSIONS]
+  const args = ['--hidden', gitignore ? '--no-require-git' : '--no-ignore', ...SEARCH_EXCLUSIONS]
   if (!pattern) return args
   // 正向 --glob 会覆盖忽略规则。--type 只预筛两边语法一致的文件名通配与简单枚举。
   // 冒号是类型定义分隔符，字符类和范围展开统一交给相对路径的 minimatch 匹配。

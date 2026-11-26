@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -60,19 +60,53 @@ describe('高性能搜索工具', () => {
         { data: '（无匹配文件）', isError: false })
     })
 
-    it(`${fallback ? '回退' : '原生'} Glob 在每页独立折叠目录，标题不占文件名额`, async () => {
+    it(`${fallback ? '回退' : '原生'} Glob 跨目录按文件修改时间选页，每页独立折叠目录`, async () => {
       const { root, ctx } = await fixture()
       if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
       const base = 'packages/example/source'
       await mkdir(join(root, base, 'nested'), { recursive: true })
+      await mkdir(join(root, base, 'empty.ts'))
       const names = Array.from({ length: 196 }, (_, n) => String(n).padStart(3, '0') + '.ts')
-      for (const name of [...names, 'nested/a.ts', 'nested/b.ts', 'nested/c.ts', 'nested/d.ts', 'nested/e.ts', 'nested/f.ts', 'y.ts', 'z.ts']) {
-        await writeFile(join(root, base, name), '')
+      const newestFirst = ['z.ts', ...names.slice(0, 195), 'nested/f.ts', 'nested/e.ts', 'nested/d.ts', 'nested/c.ts',
+        'nested/b.ts', 'nested/a.ts', 'y.ts', '195.ts']
+      for (const [n, name] of newestFirst.entries()) {
+        const path = join(root, base, name)
+        await writeFile(path, '')
+        const seconds = 1_700_000_000 - n
+        await utimes(path, seconds, seconds)
       }
       const first = await globTool.execute({ path: base, pattern: '*.ts' }, ctx)
-      assert.deepEqual(first.data.split('\n'), ['# ' + base + '/', ...names, '## nested/', 'a.ts', 'b.ts', 'c.ts', 'd.ts', '[用 offset=200 继续]'])
+      assert.deepEqual(first.data.split('\n'), ['# ' + base + '/', 'z.ts', ...names.slice(0, 195), '## nested/', 'f.ts', 'e.ts', 'd.ts', 'c.ts', '[用 offset=200 继续]'])
       const next = await globTool.execute({ path: base, pattern: '*.ts', offset: 200 }, ctx)
-      assert.deepEqual(next.data.split('\n'), ['# ' + base + '/', '## nested/', 'e.ts', 'f.ts', '# ' + base + '/', 'y.ts', 'z.ts'])
+      assert.deepEqual(next.data.split('\n'), ['# ' + base + '/', '## nested/', 'b.ts', 'a.ts', '# ' + base + '/', 'y.ts', '195.ts'])
+    })
+
+    it(`${fallback ? '回退' : '原生'} Glob 路径过长时按实际文件数续页，时间相同的文件无重复或遗漏`, async () => {
+      const { root, ctx } = await fixture()
+      if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
+      const names = Array.from({ length: 421 }, (_, n) => String(n).padStart(3, '0') + '-' + '测'.repeat(60) + '.log')
+      for (const name of names) {
+        const path = join(root, name)
+        const seconds = name === names.at(-1) ? 1_700_000_001 : 1_700_000_000
+        await writeFile(path, '')
+        await utimes(path, seconds, seconds)
+      }
+      const files: string[] = []
+      for (;;) {
+        const result = await globTool.execute({ pattern: '*.log', offset: files.length }, ctx)
+        assert.equal(result.isError, false)
+        assert.ok(Buffer.byteLength(result.data) <= 32 * 1024)
+        const rows = result.data.split('\n')
+        const next = rows.at(-1)?.match(/^\[用 offset=(\d+) 继续\]$/)
+        if (next) rows.pop()
+        assert.ok(rows.length > 0 && rows.length < 200)
+        files.push(...rows)
+        if (!next) break
+        assert.equal(Number(next[1]), files.length)
+        assert.ok(files.length < names.length)
+      }
+      assert.equal(files[0], names.at(-1))
+      assert.deepEqual(files.sort(), names)
     })
 
     it(`${fallback ? '回退' : '原生'}目录搜索按 gitignore 开关应用各级规则，明确指定文件仍可读`, async () => {
@@ -95,7 +129,9 @@ describe('高性能搜索工具', () => {
           const grep = await grepTool.execute({ path, include, pattern: 'marker', outputMode: 'files_with_matches', gitignore }, ctx)
           assert.deepEqual(grep.data.split('\n'), paths)
           const glob = await globTool.execute({ path, pattern: include, gitignore }, ctx)
-          assert.deepEqual(glob.data.split('\n'), ['# src/nested/', ...expected])
+          const [directory, ...files] = glob.data.split('\n')
+          assert.equal(directory, '# src/nested/')
+          assert.deepEqual(files.sort(), expected)
         }
       }
       const explicit = await grepTool.execute({ path: 'src/nested/git.ts', pattern: 'marker' }, ctx)
@@ -133,7 +169,7 @@ describe('高性能搜索工具', () => {
       assert.equal((await globTool.execute({ path, pattern: '*.log' }, ctx)).data, path + '/debug.log')
       assert.equal((await grepTool.execute({ path, pattern: 'trace' }, ctx)).data, path + '/debug.log:1:trace')
       const both = await globTool.execute({ path, pattern: '*.log', gitignore: false }, ctx)
-      assert.deepEqual(both.data.split('\n'), [path + '/debug.log', path + '/private.log'])
+      assert.deepEqual(both.data.split('\n').sort(), [path + '/debug.log', path + '/private.log'])
     })
 
     it(`${fallback ? '回退' : '原生'}搜索的深分页按实际显示行数推进，UTF-8 回包有界`, async () => {
@@ -176,7 +212,7 @@ describe('高性能搜索工具', () => {
           : ['build/target.txt', 'src/.cache/target.txt']
         const glob = await globTool.execute({ pattern: '**/target.txt', gitignore }, ctx)
         const grep = await grepTool.execute({ pattern: 'needle', include: '**/target.txt', outputMode: 'files_with_matches', gitignore }, ctx)
-        assert.deepEqual(glob.data.split('\n'), paths)
+        assert.deepEqual(glob.data.split('\n').sort(), paths)
         assert.deepEqual(grep.data.split('\n'), paths)
       }
       const include = 'node_modules/**/*.ts'
@@ -191,7 +227,7 @@ describe('高性能搜索工具', () => {
   it('Glob 的 brace 模式支持递归及相对于搜索目录的匹配', async () => {
     const { ctx } = await fixture()
     const recursive = await globTool.execute({ pattern: '**/*.{ts,tsx}', path: 'src' }, ctx)
-    assert.deepEqual(recursive.data.split('\n'), ['src/alpha.ts', 'src/nested/beta.tsx'])
+    assert.deepEqual(recursive.data.split('\n').sort(), ['src/alpha.ts', 'src/nested/beta.tsx'])
     const direct = await globTool.execute({ pattern: 'src/*.{ts,tsx}' }, ctx)
     assert.equal(direct.data, 'src/alpha.ts')
     for (const pattern of ['{alpha.ts,archive:old}', 'alph{a..c}.ts', '[[:alpha:]]*.ts']) {
