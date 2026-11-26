@@ -15,7 +15,8 @@ export const grepTool = buildTool({
   name: GREP_TOOL_NAME,
   description: '按正则表达式搜索文件内容',
   prompt:
-    '使用 ripgrep 的默认正则语法（Rust regex），在文件或目录中逐行搜索文本。默认按文件列出匹配行及行号，也可只列出匹配文件的路径，或统计每个文件的匹配行数。有更多结果时，末尾给出下一页的 `offset`。',
+    '使用 ripgrep 的默认正则语法（Rust regex），在文件或目录中逐行搜索文本。默认按文件列出匹配行及行号，也可只列出匹配文件的路径，或统计每个文件的匹配行数。'
+    + `剩余匹配结果超过 ${GREP_PAGE_SIZE} 条或本页内容过长时，末尾给出下一页的 \`offset\`。`,
   inputSchema: z.strictObject({
     pattern: z.string().min(1).describe('匹配文件内容的正则表达式'),
     path: z.string().optional().describe('搜索文件或目录，默认项目根目录'),
@@ -49,7 +50,7 @@ export const grepTool = buildTool({
       const page = new SearchPage(input.offset ?? 0, GREP_PAGE_SIZE)
       const gitignore = input.gitignore ?? true
       const include = input.include ? fileGlob(input.include) : undefined
-      const args = [...ripgrepFileArgs(gitignore, include?.pattern), '--color', 'never', '--with-filename']
+      const args = ['--sort', 'path', ...ripgrepFileArgs(gitignore, include?.pattern), '--color', 'never', '--with-filename']
       if (mode === 'content') {
         args.push('--null', '--line-number', '--no-heading', '--max-columns', '500', '--max-columns-preview')
       } else if (mode === 'count') args.push('--null', '--count')
