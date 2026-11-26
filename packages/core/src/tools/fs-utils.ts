@@ -31,27 +31,3 @@ export function rethrowTargetError(error: unknown, label: '文件' | '搜索路�
   }
   throw error
 }
-
-/** 目录遍历时跳过的项（避免扫进依赖和版本库） */
-export const IGNORED_DIRS = new Set([
-  'node_modules',
-  '.pnpm-store',
-  '.pnpm-cache',
-  '.yarn',
-  '.git',
-  '.svn',
-  '.hg',
-  '.jj',
-  '.sl',
-  'dist',
-  'out',
-  'build',
-  'coverage',
-  '.next',
-  '.cache',
-  '.pytest_cache',
-  '__pycache__',
-  '.venv',
-  'venv',
-  '.turbo',
-])
