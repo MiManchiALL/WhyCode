@@ -1,17 +1,8 @@
 import ignore from 'ignore'
-import { Minimatch } from 'minimatch'
 import { localWorkspaceIO, type WorkspaceDirent, type WorkspaceIO } from '../../workspace/io.ts'
 import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
-import { IGNORED_DIRS } from '../fs-utils.ts'
 import type { ToolContext } from '../tool.ts'
-
-export function fileGlob(pattern: string): Minimatch {
-  const path = pattern.replaceAll('\\', '/')
-  return new Minimatch(path.replace(/^(?:\.\/|\/)/, ''), {
-    platform: 'linux', dot: true, matchBase: !path.includes('/'), noext: true, nonegate: true, nocomment: true,
-    braceExpandMax: 1_000,
-  })
-}
+import { SEARCH_EXCLUDED_DIRS } from './file-filters.ts'
 
 interface IgnoreFile {
   directory: string
@@ -90,7 +81,7 @@ export async function* walkSearchFiles(root: string, gitignore: boolean, status:
     for (const entry of entries) {
       signal.throwIfAborted()
       const isDirectory = entry.isDirectory()
-      if (IGNORED_DIRS.has(entry.name) || (!isDirectory && !entry.isFile())) continue
+      if (SEARCH_EXCLUDED_DIRS.includes(entry.name) || (!isDirectory && !entry.isFile())) continue
       const path = join(directory, entry.name)
       let ignored = false
       for (const scope of rules) {

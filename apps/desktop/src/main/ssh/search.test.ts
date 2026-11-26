@@ -17,15 +17,15 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   const io = env.connections.io(host.target)
   const ctx: ToolContext = { workspaceIO: io, projectDir: env.project, additionalDirs: [], abortSignal: new AbortController().signal }
   await mkdir(join(env.root, 'project/nested'))
-  for (const directory of ['node_modules', 'nested/node_modules', 'nested/.cache', 'nested/build']) {
+  for (const directory of ['.git', 'node_modules', 'nested/node_modules', 'nested/.cache', 'build']) {
     await mkdir(join(env.root, 'project', directory))
-    await writeFile(join(env.root, 'project', directory, 'code.ts'), 'needle ignored')
-    await writeFile(join(env.root, 'project', directory, 'target.png'), 'ignored image')
+    await writeFile(join(env.root, 'project', directory, 'code.ts'), 'needle in ' + directory)
+    await writeFile(join(env.root, 'project', directory, 'target.png'), 'image fixture')
   }
   await writeFile(join(env.root, 'project/target.png'), 'needle in image filename fixture')
   await writeFile(join(env.root, 'project/nested/target.png'), 'nested')
   await writeFile(join(env.root, 'project/nested/code.ts'), 'const needle = "中文"\n')
-  await writeFile(join(env.root, 'project/.gitignore'), 'ignored.ts\n')
+  await writeFile(join(env.root, 'project/.gitignore'), 'ignored.ts\n.cache/\n')
   await writeFile(join(env.root, 'project/ignored.ts'), 'needle ignored by project\n')
   await writeFile(join(env.root, 'project/-options.txt'), 'needle single file\n')
   await writeFile(join(env.root, "project/quote'file.txt"), 'needle quoted file\n')
@@ -35,13 +35,13 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   }
   const searchCtx = { ...ctx, workspaceIO: { ...io, fs } }
   const glob = await globTool.execute({ pattern: 'target.png' }, searchCtx)
-  assert.equal(glob.data, 'nested/target.png\ntarget.png')
+  assert.equal(glob.data, 'build/target.png\nnested/target.png\ntarget.png')
   const grep = await grepTool.execute({ pattern: 'needle', include: '*.ts' }, searchCtx)
-  assert.equal(grep.data, 'nested/code.ts:1:const needle = "中文"')
+  assert.equal(grep.data, 'build/code.ts:1:needle in build\nnested/code.ts:1:const needle = "中文"')
   assert.equal((await globTool.execute({ pattern: 'ignored.ts' }, searchCtx)).data, '（无匹配文件）')
   assert.equal((await globTool.execute({ pattern: 'ignored.ts', gitignore: false }, searchCtx)).data, 'ignored.ts')
   const files = await grepTool.execute({ pattern: 'needle', include: '*.ts', gitignore: false, outputMode: 'files_with_matches' }, searchCtx)
-  assert.deepEqual(files.data.split('\n'), ['ignored.ts', 'nested/code.ts'])
+  assert.deepEqual(files.data.split('\n'), ['build/code.ts', 'ignored.ts', 'nested/.cache/code.ts', 'nested/code.ts'])
   for (const path of ['-options.txt', "quote'file.txt"]) {
     assert.match((await grepTool.execute({ pattern: 'needle', path }, searchCtx)).data, /:1:needle/)
   }

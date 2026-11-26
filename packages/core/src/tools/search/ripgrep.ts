@@ -4,14 +4,14 @@ import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { IGNORED_DIRS } from '../fs-utils.ts'
 import { ToolResultError } from '../tool.ts'
+import { SEARCH_EXCLUDED_DIRS } from './file-filters.ts'
 
 const MAX_STDERR_CHARS = 4_000
 const MAX_LINE_CHARS = 64 * 1024
 
 // 匹配任意深度的目录本身才能在进入前剪枝；仅排除其内容仍会读取目录。
-const SEARCH_EXCLUSIONS = [...IGNORED_DIRS].flatMap(dir => ['--glob', `!**/${dir}`])
+const SEARCH_EXCLUSIONS = SEARCH_EXCLUDED_DIRS.flatMap(dir => ['--glob', `!**/${dir}`])
 
 export function ripgrepFileArgs(gitignore: boolean, pattern?: string): string[] {
   const args = ['--hidden', gitignore ? '--no-require-git' : '--no-ignore', '--sort', 'path', ...SEARCH_EXCLUSIONS]

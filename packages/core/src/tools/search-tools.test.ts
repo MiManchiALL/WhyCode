@@ -8,7 +8,6 @@ import { validateToolInput, type ToolContext } from './tool.ts'
 import { globTool, listDirTool } from './list-glob/index.ts'
 import { grepTool } from './grep/index.ts'
 import { localWorkspaceIO } from '../workspace/io.ts'
-import { IGNORED_DIRS } from './fs-utils.ts'
 
 const roots: string[] = []
 
@@ -160,26 +159,32 @@ describe('高性能搜索工具', () => {
       assert.equal((await grepTool.execute({ path, pattern: '中', offset }, ctx)).data, '（已到结果末尾）')
     })
 
-    it(`${fallback ? '回退' : '原生'}搜索在每层跳过依赖、缓存和构建目录`, async () => {
+    it(`${fallback ? '回退' : '原生'}递归搜索固定跳过 .git 和 node_modules，其余目录按忽略规则筛选`, async () => {
       const { root, ctx } = await fixture()
-      for (const prefix of ['', 'src/nested']) {
-        for (const name of IGNORED_DIRS) {
-          const directory = join(root, prefix, name, 'deeper')
-          await mkdir(directory, { recursive: true })
-          await writeFile(join(directory, 'target.txt'), 'needle excluded\n')
-        }
-      }
-      await mkdir(join(root, 'src', 'build-tools'))
-      await writeFile(join(root, 'target.txt'), 'needle root\n')
-      await writeFile(join(root, 'src', 'build-tools', 'target.txt'), 'needle source\n')
       if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
+      const directories = ['.git', 'node_modules', 'src/nested/.git', 'src/nested/node_modules', 'build', 'dist', 'src/.cache']
+      for (const path of directories) {
+        const directory = join(root, path)
+        await mkdir(directory, { recursive: true })
+        await writeFile(join(directory, 'target.txt'), 'needle\n')
+      }
+      await writeFile(join(root, '.gitignore'), 'dist/\n')
 
-      const glob = await globTool.execute({ pattern: '**/target.txt', gitignore: false }, ctx)
-      assert.equal(glob.isError, false)
-      assert.deepEqual(glob.data.split('\n'), ['src/build-tools/target.txt', 'target.txt'])
-      const grep = await grepTool.execute({ pattern: 'needle', include: '**/target.txt', gitignore: false }, ctx)
-      assert.equal(grep.isError, false)
-      assert.deepEqual(grep.data.split('\n'), ['src/build-tools/target.txt:1:needle source', 'target.txt:1:needle root'])
+      for (const gitignore of [undefined, false]) {
+        const paths = gitignore === false
+          ? ['build/target.txt', 'dist/target.txt', 'src/.cache/target.txt']
+          : ['build/target.txt', 'src/.cache/target.txt']
+        const glob = await globTool.execute({ pattern: '**/target.txt', gitignore }, ctx)
+        const grep = await grepTool.execute({ pattern: 'needle', include: '**/target.txt', outputMode: 'files_with_matches', gitignore }, ctx)
+        assert.deepEqual(glob.data.split('\n'), paths)
+        assert.deepEqual(grep.data.split('\n'), paths)
+      }
+      const include = 'node_modules/**/*.ts'
+      assert.equal((await grepTool.execute({ pattern: 'needle', include, gitignore: false }, ctx)).data, '（无匹配）')
+      assert.equal((await globTool.execute({ pattern: include, gitignore: false }, ctx)).data, '（无匹配文件）')
+      const path = 'node_modules/hidden'
+      assert.equal((await globTool.execute({ path, pattern: '*.ts' }, ctx)).data, path + '/ignored.ts')
+      assert.equal((await grepTool.execute({ path, pattern: 'needle', include: '*.ts' }, ctx)).data, path + '/ignored.ts:1:needle ignored')
     })
   }
 
@@ -225,9 +230,10 @@ describe('高性能搜索工具', () => {
     )
     assert.deepEqual(content.data.split('\n'), ['src/alpha.ts:2:needle here', 'src/nested/beta.tsx:1:const beta = "Needle"'])
   })
-  it('ListDir 区分空目录和非空目录的页尾', async () => {
+  it('ListDir 保留单层目录过滤，并区分空目录和非空目录的页尾', async () => {
     const { ctx, root } = await fixture()
-    await mkdir(join(root, 'empty'))
+    for (const name of ['empty', '.cache', 'build', 'dist']) await mkdir(join(root, name))
+    assert.equal((await listDirTool.execute({ path: '.' }, ctx)).data, 'empty/\nsrc/')
     assert.equal((await listDirTool.execute({ path: 'empty' }, ctx)).data, '（空目录）')
     assert.equal((await listDirTool.execute({ path: 'src', offset: 2 }, ctx)).data, '（已到目录末尾，共 2 项）')
   })
