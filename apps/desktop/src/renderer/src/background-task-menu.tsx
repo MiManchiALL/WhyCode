@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { isCommandTaskActive, type BackgroundTaskSummary } from '@whycode/core/background-command'
 import { BellRing, ChevronDown, LoaderCircle, Square, Terminal } from 'lucide-react'
+import type { ConversationPresentationCache } from './conversation-presentation.ts'
 import {
   backgroundTaskStatusLabel,
   formatBackgroundTaskDuration,
@@ -13,18 +14,26 @@ type StopAction = {
   error?: string
 }
 
-export function BackgroundTaskMenu({ tasks, onStop }: {
+export function BackgroundTaskMenu({ sessionId, tasks, presentationCache, onStop, onEmpty }: {
+  sessionId: string
   tasks: readonly BackgroundTaskSummary[]
+  presentationCache: ConversationPresentationCache
   onStop: (task: BackgroundTaskSummary) => Promise<void>
+  onEmpty: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(Date.now)
   const [action, setAction] = useState<StopAction | null>(null)
-  const runningCount = tasks.filter((task) => isCommandTaskActive(task.status)).length
+  const [clearedIds, setClearedIds] = useState(() => presentationCache.get(sessionId)?.clearedBackgroundTaskIds)
+  const panel = useRef<HTMLDivElement>(null)
+  const visibleTasks = clearedIds
+    ? tasks.filter(task => isCommandTaskActive(task.status) || !clearedIds.has(task.id))
+    : tasks
+  const runningCount = visibleTasks.filter(task => isCommandTaskActive(task.status)).length
 
   useEffect(() => {
-    if (tasks.length === 0 && open) setOpen(false)
-  }, [open, tasks.length])
+    if (visibleTasks.length === 0 && open) setOpen(false)
+  }, [open, visibleTasks.length])
 
   useEffect(() => {
     if (action && (!open || !tasks.some((task) => task.id === action.taskId && isCommandTaskActive(task.status)))) {
@@ -65,10 +74,19 @@ export function BackgroundTaskMenu({ tasks, onStop }: {
     }
   }
 
-  if (tasks.length === 0) return null
+  function clearFinished() {
+    // 从完整快照取 ID，重复清空时保留仍在快照里的旧项，同时释放已被宿主淘汰的 ID。
+    const ids = new Set(tasks.filter(task => !isCommandTaskActive(task.status)).map(task => task.id))
+    presentationCache.setClearedBackgroundTaskIds(sessionId, ids)
+    setClearedIds(ids)
+    if (runningCount > 0) panel.current?.focus()
+    else onEmpty()
+  }
+
+  if (visibleTasks.length === 0) return null
   const label = runningCount > 0
     ? `${runningCount} 个后台任务运行中`
-    : `${tasks.length} 个后台任务`
+    : `${visibleTasks.length} 个后台任务`
 
   return (
     <Dialog.Root open={open} modal={false} onOpenChange={setOpen}>
@@ -87,13 +105,14 @@ export function BackgroundTaskMenu({ tasks, onStop }: {
           <ChevronDown size={13} className="wc-background-tasks-chevron" aria-hidden="true" />
         </button></Dialog.Trigger>
         <Dialog.Content
+          ref={panel}
           className="wc-background-tasks-panel"
           aria-describedby={undefined}
           onEscapeKeyDown={(event) => { if (event.isComposing) event.preventDefault() }}
         >
           <Dialog.Title className="sr-only">后台任务</Dialog.Title>
           <ul className="wc-background-task-list">
-            {tasks.map((task) => {
+            {visibleTasks.map((task) => {
               const current = action?.taskId === task.id ? action : null
               const detail = current?.error ?? task.detail
               const stopLabel = current?.phase === 'armed' ? '确认停止'
@@ -156,6 +175,18 @@ export function BackgroundTaskMenu({ tasks, onStop }: {
               )
             })}
           </ul>
+          {visibleTasks.length > runningCount && (
+            <div className="flex shrink-0 justify-end border-t border-[var(--wc-line)] px-2 py-1">
+              <button
+                type="button"
+                className="wc-focus-ring rounded-md px-2 py-1 text-xs text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)]"
+                title="从列表中移除已结束的任务，保留命令输出"
+                onClick={clearFinished}
+              >
+                清空已结束任务
+              </button>
+            </div>
+          )}
         </Dialog.Content>
       </div>
     </Dialog.Root>

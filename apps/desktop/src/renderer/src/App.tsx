@@ -2382,6 +2382,7 @@ export function App() {
               : workspace.mode === 'pending-managed' ? null : projectDir}
             workspaceMode={loadingConversation ? pendingSession?.workspace?.mode ?? 'pending-managed' : workspace.mode}
             backgroundTasks={loadingConversation ? [] : backgroundTasks}
+            presentationCache={conversationPresentationsRef.current}
             onStopBackgroundTask={stopBackgroundTask}
             rightPanelOpen={rightPanelState.open}
             disabled={loadingConversation}

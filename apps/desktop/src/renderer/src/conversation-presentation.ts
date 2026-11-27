@@ -28,6 +28,7 @@ const MAX_FILE_CHANGE_ROWS = 256
 export interface ConversationPresentation {
   expandedOverrides: Map<string, boolean>
   mermaidSources?: ReadonlySet<string>
+  clearedBackgroundTaskIds?: ReadonlySet<string>
   queuedMessagesCollapsed?: boolean
   scroll?: ConversationScrollPosition
   historyStart?: string
@@ -90,6 +91,15 @@ export class ConversationPresentationCache {
       ...previous,
       expandedOverrides: previous?.expandedOverrides ?? new Map(),
       queuedMessagesCollapsed: collapsed,
+    })
+  }
+
+  setClearedBackgroundTaskIds(key: string, ids: ReadonlySet<string>): void {
+    const previous = this.entries.get(key)
+    this.set(key, {
+      ...previous,
+      expandedOverrides: previous?.expandedOverrides ?? new Map(),
+      clearedBackgroundTaskIds: ids,
     })
   }
 
