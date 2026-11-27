@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { isCommandTaskActive, type BackgroundTaskSummary } from '@whycode/core/background-command'
-import { BellRing, ChevronDown, LoaderCircle, Square, Terminal } from 'lucide-react'
+import { BellRing, BrushCleaning, ChevronDown, LoaderCircle, Square, Terminal } from 'lucide-react'
 import type { ConversationPresentationCache } from './conversation-presentation.ts'
 import {
   backgroundTaskStatusLabel,
@@ -176,16 +176,15 @@ export function BackgroundTaskMenu({ sessionId, tasks, presentationCache, onStop
             })}
           </ul>
           {visibleTasks.length > runningCount && (
-            <div className="flex shrink-0 justify-end border-t border-[var(--wc-line)] px-2 py-1">
-              <button
-                type="button"
-                className="wc-focus-ring rounded-md px-2 py-1 text-xs text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)]"
-                title="从列表中移除已结束的任务，保留命令输出"
-                onClick={clearFinished}
-              >
-                清空已结束任务
-              </button>
-            </div>
+            <button
+              type="button"
+              className="wc-icon-button"
+              aria-label="清空已结束任务"
+              title="清空已结束任务（保留命令输出）"
+              onClick={clearFinished}
+            >
+              <BrushCleaning size={15} aria-hidden="true" />
+            </button>
           )}
         </Dialog.Content>
       </div>

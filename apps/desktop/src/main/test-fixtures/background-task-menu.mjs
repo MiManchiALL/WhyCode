@@ -25,21 +25,33 @@ app.whenReady().then(async () => {
   await show('A', tasks)
   await click('2 个后台任务运行中')
   assert.deepEqual(await rows(), Object.keys(tasks))
-  assert.ok(await run(name => {
+  const clearSelector = `button[aria-label="${clear}"]`
+  assert.ok(await run(selector => {
     const list = document.querySelector('.wc-background-task-list')
-    const button = [...document.querySelectorAll('button')].find(el => el.textContent === name)
+    list.scrollTop = list.scrollHeight
+    const button = document.querySelector(selector)
     const rect = button.getBoundingClientRect()
-    return list.scrollHeight > list.clientHeight && rect.top >= list.getBoundingClientRect().bottom
-      && rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight
-  }, clear), '窄窗口中列表独立滚动，清空按钮始终可见')
+    return list.scrollTop > 0 && button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
+  }, clearSelector), '窄窗口滚到列表末尾仍能点击清空图标')
   await click(clear)
   assert.deepEqual(await rows(), ['build', 'watch'])
   assert.ok(await run(() => document.activeElement.matches('[role="dialog"]')))
-  assert.equal(await run(name => [...document.querySelectorAll('button')].some(el => el.textContent === name), clear), false)
+  assert.ok(await run(selector => !document.querySelector(selector), clearSelector))
 
   await show('B', { ok: 'completed' })
   await click('1 个后台任务')
   assert.deepEqual(await rows(), ['ok'])
+  assert.deepEqual(await run(selector => {
+    const button = document.querySelector(selector)
+    const row = document.querySelector('.wc-background-task-row').getBoundingClientRect()
+    const rect = button.getBoundingClientRect()
+    return {
+      iconOnly: button.textContent.trim() === '' && !!button.querySelector('svg'),
+      labelled: button.title.includes(button.ariaLabel),
+      target: [button.offsetWidth, button.offsetHeight],
+      sameRow: rect.top >= row.top && rect.bottom <= row.bottom,
+    }
+  }, clearSelector), { iconOnly: true, labelled: true, target: [24, 24], sameRow: true })
   await show('A', { ...tasks, watch: 'stopped' })
   await click('1 个后台任务运行中')
   assert.deepEqual(await rows(), ['build', 'watch'])
