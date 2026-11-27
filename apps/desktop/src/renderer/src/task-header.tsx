@@ -1,7 +1,9 @@
+import { useRef } from 'react'
 import { FolderOpen } from 'lucide-react'
 import type { BackgroundTaskSummary } from '@whycode/core'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import { BackgroundTaskMenu } from './background-task-menu.tsx'
+import type { ConversationPresentationCache } from './conversation-presentation.ts'
 import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
 import { SessionTitle, type RenameSession } from './session-name-editor.tsx'
 import { SshWorkspaceStatus } from './ssh-workspace-status.tsx'
@@ -17,6 +19,7 @@ interface TaskHeaderProps {
   workspaceLabel?: string
   ssh?: { target: string; connection: SshConnectionSnapshot | null; loading: boolean }
   backgroundTasks: readonly BackgroundTaskSummary[]
+  presentationCache: ConversationPresentationCache
   onStopBackgroundTask: (task: BackgroundTaskSummary) => Promise<void>
   rightPanelOpen: boolean
   onOpenWorkspaceFolder: () => void
@@ -24,6 +27,7 @@ interface TaskHeaderProps {
 }
 
 export function TaskHeader(props: TaskHeaderProps) {
+  const sidebarToggle = useRef<HTMLButtonElement>(null)
   const workspaceReady = props.workspaceMode === 'local'
     || props.workspaceMode === 'managed'
     || props.workspaceMode === 'worktree'
@@ -49,8 +53,16 @@ export function TaskHeader(props: TaskHeaderProps) {
         {props.ssh ? <SshWorkspaceStatus key={props.ssh.target} {...props.ssh} /> : <WorkspaceBadge mode={props.workspaceMode} />}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <BackgroundTaskMenu key={props.sessionId} tasks={props.backgroundTasks} onStop={props.onStopBackgroundTask} />
+        {props.sessionId && <BackgroundTaskMenu
+          key={props.sessionId}
+          sessionId={props.sessionId}
+          tasks={props.backgroundTasks}
+          presentationCache={props.presentationCache}
+          onStop={props.onStopBackgroundTask}
+          onEmpty={() => sidebarToggle.current?.focus()}
+        />}
         <button
+          ref={sidebarToggle}
           type="button"
           className={`wc-focus-ring flex size-8 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)] ${props.rightPanelOpen ? 'bg-black/[0.055] text-[var(--wc-ink)]' : ''}`}
           disabled={props.disabled}
