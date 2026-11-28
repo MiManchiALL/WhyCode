@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { applyCoreEvent, createConversationState } from '../../shared/conversation-state.ts'
 import { conversationSections } from '../../shared/conversation-sections.ts'
-import { conversationHistoryWindow } from '../../main/conversation-history.ts'
+import { conversationHistoryWindow } from '../../shared/conversation-window.ts'
 import {
   applyExpandedOverrides,
   captureScrollPosition,

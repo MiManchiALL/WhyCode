@@ -54,7 +54,6 @@ import {
   editableUserBlockId,
   runtimeEventsAfterSnapshot,
   resumeTargetCommitted,
-  toggleExpanded,
   voteLabel,
   type Block,
 } from '../../shared/conversation-state.ts'
@@ -68,7 +67,8 @@ import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
 import { prepareBottomFileChanges, type ResponseFileChangesResult } from './response-file-changes-data.ts'
-import { prependConversationHistory, restoreConversationSnapshot } from '../../shared/conversation-history.ts'
+import { restoreConversationSnapshot } from '../../shared/conversation-history.ts'
+import { liveTailNeedsTrimming } from '../../shared/conversation-window.ts'
 import { useConversationHistory } from './use-conversation-history.ts'
 import { ConversationNavigator } from './conversation-navigator.tsx'
 import { presentBtwConversations } from './conversation-btw-groups.ts'
@@ -168,7 +168,7 @@ import {
   type ConversationScrollPosition,
 } from './conversation-presentation.ts'
 import {
-  captureConversationScrollPosition,
+  captureConversationScrollPosition, nearHistoryEdge,
   restoreConversationScrollPosition,
   scrollConversationToTarget,
   type ConversationScrollAlignment,
@@ -292,10 +292,10 @@ export function App() {
   const conversationPresentationsRef = useRef(new ConversationPresentationCache())
   const pendingScrollRestoreRef = useRef<ConversationScrollPosition | null>(null)
   const conversationScrollReleaseRef = useRef<(() => void) | null>(null)
+  const [expansionRevision, setExpansionRevision] = useState(0)
   const expandedIdsRef = useRef(view.expanded)
   const conversationFeedbackIdRef = useRef(0)
   rightPanelStateRef.current = committedRightPanelState
-  expandedIdsRef.current = view.expanded
   const loadingConversation = resumingSessionId !== null && resumingSessionId !== sessionIdRef.current
   // 描述符跟随导航展示；只有成功快照才能移交可写状态，失败时仍属于原会话。
   const rightPanelState = loadingConversation
@@ -316,11 +316,41 @@ export function App() {
     conversationScrollReleaseRef.current = null
     release?.()
   }, [])
+  const historyTarget = useRef<string | null>(null)
+  const previewSession = useRef<string | null>(null)
+  const scrollDirection = useRef<'older' | 'newer' | null>(null)
+  const lastScrollTop = useRef(0)
+  const history = useConversationHistory(view, {
+    beforePage(location) {
+      historyTarget.current = location.kind === 'around' ? location.id : null
+      const el = scrollRef.current
+      if (!el || location.kind === 'around') return
+      if (!nearHistoryEdge(el, location.kind)) return false
+      pendingScrollRestoreRef.current = captureConversationScrollPosition(el, followedBottom.current !== null)
+    },
+    onError: message => showError(message),
+  })
+  const loadingBody = loadingConversation && !history.preview
+  useLayoutEffect(() => {
+    if (resumingSessionId || !liveTailNeedsTrimming(view)) return
+    const el = scrollRef.current
+    const scroll = el ? captureConversationScrollPosition(el, followedBottom.current !== null) : null
+    pendingScrollRestoreRef.current = scroll
+    setView(history.trimLive(view, history.view, scroll?.anchor?.blockId ?? scroll?.anchor?.sectionId))
+  }, [view, history.trimLive, history.view, resumingSessionId])
+  const prefetch = useCallback((direction: 'older' | 'newer') => {
+    const el = scrollRef.current
+    if (!el || loadingBody || pendingScrollRestoreRef.current) return
+    if (nearHistoryEdge(el, direction)) void history.read(direction)
+  }, [history.read, loadingBody])
   const recentlyScrolledAway = useScrollIntent(scrollRef, () => {
     if (followedBottom.current !== null) releaseConversationScroll()
     followedBottom.current = null
     pendingScrollRestoreRef.current = null
-  }, !loadingConversation)
+  }, !loadingBody, direction => {
+    scrollDirection.current = direction
+    prefetch(direction)
+  })
   const btwModeRef = useRef<BtwMode | null>(null)
   const slashCommandRef = useRef<(command: ComposerCommandId) => void>(() => {})
   const conversationEventBufferRef = useRef<ConversationEventBuffer | null>(null)
@@ -351,9 +381,18 @@ export function App() {
     () => conversationSections(blocks, workStartedAt),
     [blocks, workStartedAt],
   )
+  const tailSections = useMemo(() => history.preview ? conversationSections(history.preview.blocks) : sections, [history.preview, sections])
+  const readingSections = useMemo(() => history.view === history.tail ? tailSections
+    : conversationSections(history.view.blocks, history.after === null ? workStartedAt : null),
+  [history.view, history.tail, history.after, tailSections, workStartedAt])
+  const presentationKey = previewSession.current ?? composerKey(runtimeId, sessionIdRef.current)
+  const readingExpanded = useMemo(() => applyExpandedOverrides(
+    history.view.expanded, conversationPresentationsRef.current.get(presentationKey)?.expandedOverrides,
+  ), [history.view.expanded, presentationKey, expansionRevision])
+  expandedIdsRef.current = readingExpanded
   const btwPresentation = useMemo(
-    () => presentBtwConversations(sections, view.expanded),
-    [sections, view.expanded],
+    () => presentBtwConversations(readingSections, readingExpanded, history.after === null),
+    [readingSections, readingExpanded, history.after],
   )
   useEffect(() => releaseConversationScroll, [releaseConversationScroll])
   const scrollToConversation = useCallback((targetId: string | HTMLElement, alignment: ConversationScrollAlignment = 'start') => {
@@ -363,26 +402,20 @@ export function App() {
     const navigation = scrollConversationToTarget(scroller, targetId, alignment)
     if (!navigation) return false
     conversationScrollReleaseRef.current = navigation.release
+    lastScrollTop.current = scroller.scrollTop
     followedBottom.current = null
     setShowJumpBottom(true)
     return true
   }, [releaseConversationScroll])
-  const history = useConversationHistory({
-    prepend: (pages) => {
-      const scroller = scrollRef.current
-      if (scroller) pendingScrollRestoreRef.current = captureConversationScrollPosition(scroller)
-      setView((current) => pages.reduce(prependConversationHistory, current))
-    },
-    onError: (message) => showError(message),
-  })
   const navigateConversation = useCallback((targetId: string | HTMLElement, alignment: ConversationScrollAlignment = 'start') => {
     pendingScrollRestoreRef.current = null
+    scrollDirection.current = null
     if (!scrollToConversation(targetId, alignment) && typeof targetId === 'string') {
-      void history.loadOlder(targetId)
+      void history.read({ around: targetId })
     } else {
       history.cancel()
     }
-  }, [history.cancel, history.loadOlder, scrollToConversation])
+  }, [history.cancel, history.read, scrollToConversation])
   const latestForkTurnId = useMemo(() => findLatestForkTurnId(sections), [sections])
   const setBtwMode = useCallback((mode: BtwMode | null) => {
     btwModeRef.current = mode
@@ -408,7 +441,8 @@ export function App() {
   }, [showConversationFeedback])
   const sshConnection = useSshWorkspaceConnection(workspace.mode === 'ssh' ? workspace.target : null, showError)
   const historyNeedsSkillCatalog = useMemo(() => workspace.mode === 'ssh'
-    && blocks.some(block => block.kind === 'tool' && block.call.name === 'Skill'), [workspace.mode, blocks])
+    && !history.preview && history.view.blocks.some(block => block.kind === 'tool' && block.call.name === 'Skill'),
+  [workspace.mode, history.preview, history.view.blocks])
   const {
     menuId: composerMenuId,
     activeOptionId: composerActiveOptionId,
@@ -455,8 +489,8 @@ export function App() {
     onCommand: (command) => slashCommandRef.current(command),
   })
   const checkpointRestoreAnchors = useMemo(
-    () => checkpointRestoreAnchorIds(view),
-    [view.blocks, view.turnStartBlocks],
+    () => checkpointRestoreAnchorIds(history.view),
+    [history.view.blocks, history.view.turnStartBlocks],
   )
   const thinkingGapDelay = thinkingGapRevealDelay({
     blocks,
@@ -635,16 +669,30 @@ export function App() {
       key,
       followedBottom.current !== null
         ? { atBottom: true, scrollTop: 0 }
-        : captureConversationScrollPosition(scrollElement),
-      scrollElement.querySelector<HTMLElement>('[data-conversation-scroll-block]')?.dataset.conversationScrollBlock,
+        : captureConversationScrollPosition(scrollElement, false),
     )
   }, [])
 
   const setResumingSessionId = useCallback((sessionId: string | null) => {
     if (sessionId) history.cancel()
+    if (previewSession.current && previewSession.current !== sessionId) {
+      previewSession.current = null
+      history.dismissPreview()
+      pendingScrollRestoreRef.current = conversationPresentationsRef.current.get(composerKey(runtimeIdRef.current, sessionIdRef.current))?.scroll ?? { atBottom: true, scrollTop: 0 }
+    }
     resumingSessionIdRef.current = sessionId
     setResumingSessionIdState(sessionId)
-  }, [history.cancel])
+  }, [history.cancel, history.dismissPreview])
+
+  useEffect(() => window.whycode.onConversationPreview(preview => {
+    if (resumingSessionIdRef.current !== preview.sessionId) return
+    previewSession.current = preview.sessionId
+    const scroll = conversationPresentationsRef.current.get(preview.sessionId)?.scroll ?? { atBottom: true, scrollTop: 0 }
+    pendingScrollRestoreRef.current = scroll
+    followedBottom.current = scroll.atBottom ? scroll.scrollTop : null
+    scrollDirection.current = null
+    history.reset(preview.runtimeId, preview.history, 'preview')
+  }), [history.reset])
 
   const setDeletingSession = useCallback((sessionId: string, deleting: boolean) => {
     const next = updateDeletingSessions(deletingSessionIdsRef.current, sessionId, deleting)
@@ -902,17 +950,16 @@ export function App() {
     setQueuedMessagesCollapsed(presentation?.queuedMessagesCollapsed ?? false)
     const replayedView = restoreConversationSnapshot(snapshot.history.view)
     composerSubmissions.receiveSnapshot(snapshot.runtimeId, replayedView.blocks, snapshot.queuedInputs)
-    history.reset(snapshot.runtimeId, snapshot.history)
+    const promotingPreview = !!previewSession.current && previewSession.current === snapshot.sessionId
+    const previewScroll = promotingPreview && scrollRef.current
+      ? captureConversationScrollPosition(scrollRef.current, followedBottom.current !== null) : null
+    const backgroundSnapshot = !!previewSession.current && !promotingPreview && !!resumeRequestRef.current
+    if (!backgroundSnapshot) previewSession.current = null
+    history.reset(snapshot.runtimeId, snapshot.history, backgroundSnapshot ? 'background' : 'selected')
     conversationEventBufferRef.current?.clear()
-    setView({
-      ...replayedView,
-      expanded: applyExpandedOverrides(
-        replayedView.expanded,
-        presentation?.expandedOverrides,
-      ),
-    })
-    if (changingRuntime) {
-      const scroll = presentation?.scroll ?? { atBottom: true, scrollTop: 0 }
+    setView(replayedView)
+    if (changingRuntime && !backgroundSnapshot) {
+      const scroll = previewScroll ?? presentation?.scroll ?? { atBottom: true, scrollTop: 0 }
       pendingScrollRestoreRef.current = scroll
       followedBottom.current = scroll.atBottom ? scroll.scrollTop : null
       setShowJumpBottom(!scroll.atBottom)
@@ -927,7 +974,10 @@ export function App() {
     setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
     if (snapshot.deletingSessionId) setDeletingSession(snapshot.deletingSessionId, true)
-    setResumingSessionId(snapshot.resumingSessionId)
+    // 首次订阅的快照可能在用户点击之后到达。只有当前导航请求能结束这次切换。
+    if (!resumeRequestRef.current || snapshot.sessionId === resumingSessionIdRef.current) {
+      setResumingSessionId(snapshot.resumingSessionId)
+    }
     setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
     setStopping(false)
     setQueued(snapshot.queuedInputs)
@@ -990,11 +1040,40 @@ export function App() {
     setResumingSessionId,
   ])
 
+  const rewriteRequest = useRef<symbol | null>(null)
+  const refreshRewrittenHistory = useCallback(async (keepPosition: boolean) => {
+    const id = runtimeIdRef.current
+    const token = Symbol()
+    rewriteRequest.current = token
+    const current = () => rewriteRequest.current === token && id === runtimeIdRef.current && !resumingSessionIdRef.current
+    try {
+      // 回滚可能穿过已释放的页；从权威投影同时刷新定位轨和实时尾部。
+      while (current()) {
+        const el = scrollRef.current
+        const scroll = el && keepPosition ? captureConversationScrollPosition(el, followedBottom.current !== null) : null
+        const anchor = scroll?.anchor?.blockId ?? scroll?.anchor?.sectionId
+        const snapshot = await window.whycode.runtimeSnapshot(id, anchor)
+        if (!current()) return
+        if (snapshot.eventSequence < activeEventSequenceRef.current) continue
+        pendingScrollRestoreRef.current = scroll ?? { atBottom: true, scrollTop: 0 }
+        historyTarget.current = null
+        scrollDirection.current = null
+        applyRuntimeSnapshot(snapshot)
+        return
+      }
+    } catch (error) {
+      if (current()) showError(error instanceof Error ? error.message : String(error))
+    }
+  }, [applyRuntimeSnapshot, showError])
+
   const consumeEvent = useCallback((event: CoreEvent, occurredAt?: string) => {
     const feedback = conversationEventFeedback(event)
     if (feedback) showConversationFeedback(feedback.tone, feedback.message)
-    if (event.type === 'user-message-edited' || event.type === 'btw-message-edited'
-      || (event.type === 'checkpoint-restored' && event.ok)) history.cancel()
+    if (event.type === 'user-message-edited' || event.type === 'btw-message-edited') history.cancel()
+    if (event.type === 'checkpoint-restored' && event.ok) {
+      history.cancel()
+      void refreshRewrittenHistory(event.scope === 'files')
+    }
     applyConversationEvent(event, occurredAt)
     composerSubmissions.receiveEvent(runtimeIdRef.current, event)
     switch (event.type) {
@@ -1112,7 +1191,7 @@ export function App() {
     editRestoredInput,
     refreshSessions,
     showConversationFeedback,
-    history.cancel,
+    history.cancel, refreshRewrittenHistory,
   ])
 
   useEffect(() => {
@@ -1404,25 +1483,36 @@ export function App() {
   const restoreConversationAfterRender = useCallback(() => {
     const pending = pendingScrollRestoreRef.current
     const scrollElement = scrollRef.current
-    if (resumingSessionIdRef.current || !scrollElement) return
-    const loaded = history.completeRender(blocks[0]?.id)
-    if (!loaded) return
+    if (loadingBody || !scrollElement) return
     if (pending) {
       pendingScrollRestoreRef.current = null
       releaseConversationScroll()
       const restoration = restoreConversationScrollPosition(pending, scrollElement)
       conversationScrollReleaseRef.current = restoration.release
-      followedBottom.current = restoration.position.atBottom ? restoration.position.scrollTop : null
-      setShowJumpBottom(!restoration.position.atBottom)
+      followedBottom.current = pending.atBottom && history.after === null ? restoration.position.scrollTop : null
+      setShowJumpBottom(followedBottom.current === null)
     }
-    const target = loaded.targetId
+    const target = historyTarget.current
+    historyTarget.current = null
     if (target) scrollToConversation(btwPresentation.navigationTargetIds.get(target) ?? target)
-  }, [blocks, releaseConversationScroll, history.completeRender, scrollToConversation, btwPresentation.navigationTargetIds])
+    lastScrollTop.current = scrollElement.scrollTop
+  }, [loadingBody, history.after, releaseConversationScroll, scrollToConversation, btwPresentation.navigationTargetIds])
+
+  useLayoutEffect(() => {
+    if (loadingBody) return
+    const frame = requestAnimationFrame(() => {
+      const el = scrollRef.current
+      if (!el) return
+      if (el.scrollHeight <= el.clientHeight + 1 && history.before !== null) prefetch('older')
+      else if (scrollDirection.current) prefetch(scrollDirection.current)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [history.reading, history.runtimeId, history.before, loadingBody, prefetch])
 
   useLayoutEffect(() => {
     const scrollElement = scrollRef.current
     const contentElement = conversationContentRef.current
-    if (resumingSessionId || !scrollElement || !contentElement) return
+    if (loadingBody || !scrollElement || !contentElement) return
     // Markdown/公式与离屏段变为真实高度后，贴底语义仍应指向新的真实底部。
     const observer = new ResizeObserver(() => {
       if (pendingScrollRestoreRef.current || followedBottom.current === null) return
@@ -1432,17 +1522,17 @@ export function App() {
     observer.observe(scrollElement)
     observer.observe(contentElement)
     return () => observer.disconnect()
-  }, [resumingSessionId, scrollToEnd])
+  }, [loadingBody, scrollToEnd])
 
   useEffect(() => {
-    if (!resumingSessionId && !pendingScrollRestoreRef.current && followedBottom.current !== null) {
+    if (!loadingBody && !pendingScrollRestoreRef.current && followedBottom.current !== null) {
       scrollToEnd()
     }
-  }, [blocks, approval, thinkingGapVisible, resumingSessionId, scrollToEnd])
+  }, [history.view.blocks, approval, thinkingGapVisible, loadingBody, scrollToEnd])
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current
-    if (!el || resumingSessionIdRef.current || pendingScrollRestoreRef.current) return
+    if (!el || loadingBody || pendingScrollRestoreRef.current) return
     const bottom = Math.max(0, el.scrollHeight - el.clientHeight)
     if (followedBottom.current !== null && Math.abs(bottom - followedBottom.current) > 1) {
       scrollToEnd()
@@ -1450,20 +1540,27 @@ export function App() {
     }
     const distance = bottom - el.scrollTop
     const nearBottom = distance < 60
-    const following = nearBottom && (!recentlyScrolledAway() || distance <= 1)
+    const following = history.after === null && nearBottom && (!recentlyScrolledAway() || distance <= 1)
     if (!following && followedBottom.current !== null) releaseConversationScroll()
     followedBottom.current = following ? bottom : null
     setShowJumpBottom(!following)
-    if (!nearBottom && el.scrollTop <= el.clientHeight) void history.loadOlder()
-  }, [history.loadOlder, recentlyScrolledAway, releaseConversationScroll, scrollToEnd])
+    const delta = el.scrollTop - lastScrollTop.current
+    lastScrollTop.current = el.scrollTop
+    if (delta && !following) {
+      scrollDirection.current = delta < 0 ? 'older' : 'newer'
+      prefetch(scrollDirection.current)
+    }
+  }, [loadingBody, history.after, prefetch, recentlyScrolledAway, releaseConversationScroll, scrollToEnd])
 
   const jumpToBottom = useCallback(() => {
-    history.cancel()
+    scrollDirection.current = null
+    historyTarget.current = null
     pendingScrollRestoreRef.current = null
+    history.toTail()
     releaseConversationScroll()
     scrollToEnd()
     setShowJumpBottom(false)
-  }, [history.cancel, releaseConversationScroll, scrollToEnd])
+  }, [history.toTail, releaseConversationScroll, scrollToEnd])
 
   const busy = status !== 'idle' && status !== 'error'
   const workActive = busy || workStartedAt !== null
@@ -1684,8 +1781,9 @@ export function App() {
     }
     setResumingSessionId(sessionId)
     const presentation = conversationPresentationsRef.current.get(sessionId)
-    const historyStart = presentation?.scroll?.atBottom === false ? presentation.historyStart : undefined
-    const request = window.whycode.resumeSession(sessionId, historyStart).then(async (result) => {
+    const anchor = presentation?.scroll?.anchor
+    const historyAnchor = anchor?.blockId ?? anchor?.sectionId
+    const request = window.whycode.resumeSession(sessionId, historyAnchor).then(async (result) => {
       if (resumeRequestRef.current !== request) return
       if (!result.ok) {
         showError(result.error)
@@ -2198,11 +2296,9 @@ export function App() {
     const nextExpanded = new Set(expandedIdsRef.current)
     shouldExpand ? nextExpanded.add(id) : nextExpanded.delete(id)
     expandedIdsRef.current = nextExpanded
-    const key = composerKey(runtimeIdRef.current, sessionIdRef.current)
+    const key = previewSession.current ?? composerKey(runtimeIdRef.current, sessionIdRef.current)
     conversationPresentationsRef.current.setExpanded(key, id, shouldExpand)
-    setView((current) => current.expanded.has(id) === shouldExpand
-      ? current
-      : toggleExpanded(current, id))
+    setExpansionRevision(revision => revision + 1)
   }, [])
 
   const changeQueuedMessagesCollapsed = useCallback((collapsed: boolean) => {
@@ -2283,6 +2379,8 @@ export function App() {
       : null
 
   const pendingSession = sessions.find((session) => session.sessionId === resumingSessionId)
+  const readingWorkspace = history.preview ? pendingSession?.workspace : workspace
+  const readingDirectory = readingWorkspace ? workspaceDisplayDirectory(readingWorkspace) : null
   const pendingDraft = loadingConversation
     ? [...pendingSubmissions.values()].find((submission) => submission.sessionId === resumingSessionId)?.remainder
       ?? composerDraftsRef.current.get(resumingSessionId)
@@ -2398,13 +2496,14 @@ export function App() {
             inert={panelFullscreen}
             className="wc-conversation-navigator"
             aria-label="会话定位"
-            aria-hidden={loadingConversation}
+            aria-hidden={loadingBody}
           >
-            {!loadingConversation && (
+            {!loadingBody && (
               <ConversationNavigator
-                key={runtimeId}
-                sections={sections}
+                key={history.runtimeId}
+                sections={tailSections}
                 earlierEntries={history.earlierEntries}
+                visibleWindow={history.reading}
                 navigationTargetIds={btwPresentation.navigationTargetIds}
                 scrollRef={scrollRef}
                 onNavigate={navigateConversation}
@@ -2431,15 +2530,16 @@ export function App() {
                   ref={conversationContentRef}
                   className="wc-conversation-content wc-conversation-balanced-content mx-auto w-full max-w-4xl"
                 >
-                  <MarkdownNavigation baseDir={projectDir} onNavigate={openPathPreview}>
+                  <MarkdownNavigation baseDir={readingDirectory} onNavigate={openPathPreview}>
                     <ConversationView
-                      remote={workspace.mode === 'ssh'}
-                      runtimeId={runtimeId}
-                      markdownViewOwner={markdownViewOwner}
-                      pendingSessionId={loadingConversation ? resumingSessionId : null}
+                      remote={readingWorkspace?.mode === 'ssh'}
+                      runtimeId={history.runtimeId}
+                      markdownViewOwner={history.preview ? undefined : markdownViewOwner}
+                      pendingSessionId={loadingBody ? resumingSessionId : null}
+                      readOnly={!!history.preview}
                       onReady={restoreConversationAfterRender}
-                      active={resumingSessionId === null}
-                      emptyState={!conversationStarted && !pendingMessage && (
+                      active={!loadingBody}
+                      emptyState={!history.preview && !conversationStarted && !pendingMessage && (
                         <div className="mx-auto mt-[18vh] max-w-md text-center">
                           <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
                           <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
@@ -2451,15 +2551,15 @@ export function App() {
                       )}
                       items={btwPresentation.items}
                       latestBtwConversationId={btwPresentation.latestBtwConversationId}
-                      expandedIds={view.expanded}
-                      editableBlockId={editableBlockId}
+                      expandedIds={readingExpanded}
+                      editableBlockId={history.preview ? null : editableBlockId}
                       busy={interactionBusy}
                       checkpointRestoreAnchorIds={checkpointRestoreAnchors}
                       checkpointRestoreToolUseId={checkpointRestoreToolUseId}
-                      fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
+                      fileRollbackBoundaryTurnId={history.tail.fileRollbackBoundaryTurnId}
                       forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
                       skills={skillCatalog.skills}
-                      projectDir={projectDir}
+                      projectDir={readingDirectory}
                       onCheckpointRestoreRequest={requestCheckpointRestore}
                       onNavigate={navigateConversation}
                       onEdit={editUserMessage}
@@ -2469,12 +2569,14 @@ export function App() {
                       onOpenCompaction={openCompactionSummary}
                       onToggle={toggle}
                     >
-                      {presentedInputs.answers.map(answer => <PendingUserMessage key={answer.id} answer={answer.text} />)}
-                      {pendingMessage && <PendingUserMessage draft={pendingMessage} />}
-                      {!conversationStarted && pendingMessage && worktreePreparation && (
-                        <WorktreePreparation baseRef={worktreePreparation.baseRef} />
-                      )}
-                      {thinkingGapVisible && <ThinkingGapIndicator />}
+                      {!history.preview && history.after === null && <>
+                        {presentedInputs.answers.map(answer => <PendingUserMessage key={answer.id} answer={answer.text} />)}
+                        {pendingMessage && <PendingUserMessage draft={pendingMessage} />}
+                        {!conversationStarted && pendingMessage && worktreePreparation && (
+                          <WorktreePreparation baseRef={worktreePreparation.baseRef} />
+                        )}
+                        {thinkingGapVisible && <ThinkingGapIndicator />}
+                      </>}
                       {runtimeId && <span key={runtimeId} aria-hidden="true" className="wc-conversation-reveal" />}
                     </ConversationView>
                   </MarkdownNavigation>
@@ -2484,18 +2586,18 @@ export function App() {
 
             <div className="relative shrink-0 px-4 pb-4 pt-1">
               <div className="wc-conversation-balanced-content relative mx-auto w-full max-w-4xl">
-                <div hidden={loadingConversation}>
-                  {showJumpBottom && (
-                    <button
-                      type="button"
-                      className="wc-focus-ring absolute -top-9 left-1/2 -translate-x-1/2 rounded-full border border-[var(--wc-line)] bg-white px-3 py-1.5 text-xs text-[var(--wc-muted)] shadow-sm hover:border-[var(--wc-line-strong)]"
-                      onClick={jumpToBottom}
-                      title="回到底部并恢复自动跟随"
-                    >
-                      ↓ 回到底部
-                    </button>
-                  )}
+                {!loadingBody && showJumpBottom && (
+                  <button
+                    type="button"
+                    className="wc-focus-ring absolute -top-9 left-1/2 -translate-x-1/2 rounded-full border border-[var(--wc-line)] bg-white px-3 py-1.5 text-xs text-[var(--wc-muted)] shadow-sm hover:border-[var(--wc-line-strong)]"
+                    onClick={jumpToBottom}
+                    title="回到底部并恢复自动跟随"
+                  >
+                    ↓ 回到底部
+                  </button>
+                )}
 
+                <div hidden={loadingConversation}>
                   {approval && (
                     <div className="mb-2">
                       <ApprovalCard approval={approval} onRespond={respondApproval} />

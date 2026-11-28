@@ -32,7 +32,7 @@ interface PendingStep {
  */
 export class ViewTimeline {
   private readonly onWriteError: (error: unknown) => void
-  private readonly history = new ConversationHistoryProjection()
+  private readonly history: ConversationHistoryProjection
   private captureSequence = 0
   private readonly pendingWrites = new Set<Promise<void>>()
   private pending: Record<Channel, PendingStep> = {
@@ -41,7 +41,8 @@ export class ViewTimeline {
     C: { writer: null, events: [], timestamps: [], order: [] },
   }
 
-  constructor(onWriteError: (error: unknown) => void) {
+  constructor(onWriteError: (error: unknown) => void, history = new ConversationHistoryProjection()) {
+    this.history = history
     this.onWriteError = onWriteError
   }
 

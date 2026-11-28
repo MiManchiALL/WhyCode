@@ -48,6 +48,7 @@ interface ConversationViewProps {
   pendingSessionId?: string | null
   onReady?: () => void
   active?: boolean
+  readOnly?: boolean
   items: readonly ConversationDisplayItem[]
   latestBtwConversationId: string | null
   expandedIds: ReadonlySet<string>
@@ -143,7 +144,7 @@ export const ConversationView = memo(function ConversationView(props: Conversati
     <>
       {pending && <SessionLoading />}
       <div className="transition-none aria-hidden:opacity-0"
-        aria-hidden={pending || undefined} inert={pending || props.active === false}>
+        aria-hidden={pending || undefined} inert={pending || props.active === false || props.readOnly}>
         {emptyState}
         <ConversationContents {...contents} />
         {children}

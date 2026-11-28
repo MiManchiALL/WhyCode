@@ -2,7 +2,7 @@ import { protocol } from 'electron'
 import { PREVIEW_SCHEME } from '../shared/workspace-files.ts'
 import { SITE_ICON_SCHEME } from '../shared/site-icon.ts'
 import { BROWSER_FILE_SCHEME } from '../shared/browser.ts'
-import { readStoredImage } from '@whycode/core'
+import type { readStoredImage } from '@whycode/core'
 
 const ATTACHMENT_SCHEME = 'whycode-attachment'
 
@@ -25,7 +25,7 @@ export function registerFileSchemes(): void {
 
 /** 只暴露宿主确认归属的会话附件目录，不提供任意本地文件读取。 */
 export function registerAttachmentProtocol(
-  directoryForSession: (sessionId: string) => Promise<string | null>,
+  readImage: (sessionId: string, storageName: string) => Promise<Awaited<ReturnType<typeof readStoredImage>> | null>,
 ): void {
   protocol.handle(ATTACHMENT_SCHEME, async (request) => {
     if (request.method !== 'GET') return new Response(null, { status: 405 })
@@ -33,11 +33,9 @@ export function registerAttachmentProtocol(
       const url = new URL(request.url)
       const sessionId = url.hostname
       const storageName = decodeURIComponent(url.pathname.slice(1))
-      const directory = await directoryForSession(sessionId)
-      if (!directory || storageName.includes('/')) {
-        return new Response(null, { status: 404 })
-      }
-      const stored = await readStoredImage(directory, storageName)
+      if (storageName.includes('/')) return new Response(null, { status: 404 })
+      const stored = await readImage(sessionId, storageName)
+      if (!stored) return new Response(null, { status: 404 })
       return new Response(Uint8Array.from(stored.bytes), {
         status: 200,
         headers: {

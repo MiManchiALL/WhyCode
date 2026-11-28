@@ -7,6 +7,7 @@ import {
   visibleConversationNavigationMarkers,
   type ConversationNavigationEntry,
 } from '../../shared/conversation-navigation.ts'
+import type { ConversationHistoryWindow } from '../../shared/conversation-history.ts'
 import type { ConversationSection } from '../../shared/conversation-sections.ts'
 import { useConversationNavigator } from './use-conversation-navigator.ts'
 
@@ -14,6 +15,7 @@ const TOOLTIP_EDGE_PX = 64
 
 interface ConversationNavigatorProps {
   sections: readonly ConversationSection[]
+  visibleWindow?: ConversationHistoryWindow
   earlierEntries: readonly ConversationNavigationEntry[]
   navigationTargetIds: ReadonlyMap<string, string>
   scrollRef: RefObject<HTMLElement | null>
@@ -88,6 +90,7 @@ export const ConversationNavigator = memo(
   },
   (previous, next) => previous.scrollRef === next.scrollRef
     && previous.onNavigate === next.onNavigate
+    && previous.visibleWindow === next.visibleWindow
     && previous.earlierEntries === next.earlierEntries
     && sameNavigationTargets(previous.navigationTargetIds, next.navigationTargetIds)
     && sameConversationNavigationTimeline(previous.sections, next.sections),

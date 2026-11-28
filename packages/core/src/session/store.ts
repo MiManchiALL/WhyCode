@@ -97,6 +97,14 @@ interface TurnEditTransaction {
   consensusState: ConsensusPersistedState | null
 }
 
+/** 已验证的展示记录。执行、编辑和写入能力只随完整打开的 Journal 交付。 */
+export interface SessionHistorySource {
+  events: readonly ViewEvent[]
+  timestamps: readonly string[]
+  attachmentDirectory: string
+  images: readonly ImageAttachment[]
+}
+
 export class SessionStore {
   private readonly rootDir: string
   private readonly pdfProcessor: PdfProcessor | undefined
@@ -168,7 +176,7 @@ export class SessionStore {
     )
   }
 
-  async open(sessionId: string): Promise<SessionJournal> {
+  async open(sessionId: string, onHistory?: (source: SessionHistorySource) => Promise<void>): Promise<SessionJournal> {
     validateSessionId(sessionId)
     const paths = this.pathsFor(sessionId)
     if (await hasSessionDeletionMarker(paths)) {
@@ -198,30 +206,16 @@ export class SessionStore {
         await file.close()
       }
     }
-    return this.openLoaded(sessionId, paths, buildLoadedSession(entries))
+    return this.openLoaded(sessionId, paths, buildLoadedSession(entries), onHistory)
   }
 
-  private async openLoaded(sessionId: string, paths: SessionPaths, loaded: LoadedSession): Promise<SessionJournal> {
-    const diskSignature = await attachmentValidationSignature(paths, loaded).catch(() => null)
-    if (
-      diskSignature === null
-      || this.attachmentValidationSignatures.get(sessionId) !== diskSignature
-    ) {
-      this.attachmentValidationSignatures.delete(sessionId)
-      loaded = await validateLoadedSessionAttachments(
-        loaded,
-        paths.attachments,
-        this.pdfProcessor,
-      )
-      this.attachmentValidationSignatures.set(
-        sessionId,
-        await attachmentValidationSignature(paths, loaded),
-      )
-    }
+  private async openLoaded(
+    sessionId: string, paths: SessionPaths, loaded: LoadedSession,
+    onHistory?: (source: SessionHistorySource) => Promise<void>,
+  ): Promise<SessionJournal> {
     if (loaded.metadata.sessionId !== sessionId) throw new Error('会话 ID 与目录不匹配')
     const metadata = loaded.metadata
-    await writeMetadata(paths.metadata, metadata)
-    return new SessionJournal(
+    const journal = new SessionJournal(
       paths,
       metadata,
       loaded.customSystemPrompt,
@@ -248,6 +242,30 @@ export class SessionStore {
       loaded.interruptedBtw,
       editedOutTurnIds(loaded.entries),
     )
+    await onHistory?.({
+      events: journal.initialViewEvents,
+      timestamps: journal.initialViewEventTimestamps,
+      attachmentDirectory: paths.attachments,
+      images: loaded.imageAttachments,
+    })
+    const diskSignature = await attachmentValidationSignature(paths, loaded).catch(() => null)
+    if (
+      diskSignature === null
+      || this.attachmentValidationSignatures.get(sessionId) !== diskSignature
+    ) {
+      this.attachmentValidationSignatures.delete(sessionId)
+      await validateLoadedSessionAttachments(
+        loaded,
+        paths.attachments,
+        this.pdfProcessor,
+      )
+      this.attachmentValidationSignatures.set(
+        sessionId,
+        await attachmentValidationSignature(paths, loaded),
+      )
+    }
+    await writeMetadata(paths.metadata, metadata)
+    return journal
   }
 
   fork(
@@ -1905,7 +1923,7 @@ async function validateLoadedSessionAttachments(
   loaded: LoadedSession,
   attachmentDirectory: string,
   pdfProcessor: PdfProcessor | undefined,
-): Promise<LoadedSession> {
+): Promise<void> {
   await cleanupUnreferencedAttachments(attachmentDirectory, {
     imageAttachments: loaded.imageAttachments,
     pdfAttachments: loaded.pdfAttachments,
@@ -1925,5 +1943,4 @@ async function validateLoadedSessionAttachments(
       new AbortController().signal,
     )
   }
-  return loaded
 }

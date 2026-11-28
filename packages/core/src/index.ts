@@ -256,7 +256,7 @@ export type {
   ConsensusTaskOutcome,
 } from './consensus/types.ts'
 export { consensusPersistedStateSchema } from './consensus/types.ts'
-export { SessionStore, SessionJournal } from './session/store.ts'
+export { SessionStore, SessionJournal, type SessionHistorySource } from './session/store.ts'
 export { queuedMessageActionSchema } from './session/types.ts'
 export type { SessionCompactionSummary } from './session/compaction-summary.ts'
 export type {
@@ -306,6 +306,7 @@ export {
   importImageAttachments,
   prepareImageAttachmentImport,
   readStoredImage,
+  readValidatedStoredImage,
   validateStoredImageAttachments,
 } from './attachments/storage.ts'
 export type {

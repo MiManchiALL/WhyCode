@@ -1,105 +1,129 @@
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
-import type { ConversationHistoryWindow, ConversationSnapshot } from '../../shared/conversation-history.ts'
-import type { ConversationNavigationEntry } from '../../shared/conversation-navigation.ts'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import {
+  conversationSnapshotRange, prependConversationHistory, restoreConversationSnapshot,
+  type ConversationHistorySnapshot, type ConversationHistoryWindow, type HistoryLocation,
+} from '../../shared/conversation-history.ts'
+import { conversationHistorySnapshot, conversationReadingWindow } from '../../shared/conversation-window.ts'
+import type { ConversationState } from '../../shared/conversation-state.ts'
 
-interface HistoryPosition {
+interface Position {
   runtimeId: string
-  before: number | null
-  earlierEntries: readonly ConversationNavigationEntry[]
+  tailBefore: number | null
+  earlierEntries: ConversationHistorySnapshot['earlierEntries']
+  reading?: ConversationHistoryWindow
+  preview: ConversationState | null
 }
 
-interface HistoryCallbacks {
-  prepend: (pages: readonly ConversationSnapshot[]) => void
+function windowStart(position: Position): number | null {
+  const { reading, tailBefore } = position
+  if (!reading) return tailBefore
+  if (reading.after !== null) return reading.before
+  return Math.min(reading.before ?? 0, tailBefore ?? 0) || null
+}
+
+const empty: Position = { runtimeId: '', tailBefore: null, earlierEntries: [], preview: null }
+
+export function useConversationHistory(live: ConversationState, callbacks: {
+  beforePage: (location: HistoryLocation) => boolean | void
   onError: (message: string) => void
-}
-
-/** 会话或定位目标变化时，丢弃尚未接收的读取结果和过期的滚动目标。 */
-export function useConversationHistory(callbacks: HistoryCallbacks) {
-  const callbacksRef = useRef(callbacks)
-  callbacksRef.current = callbacks
-  const [position, setPosition] = useState<HistoryPosition>({ runtimeId: '', before: null, earlierEntries: [] })
-  const positionRef = useRef(position)
-  const requestRef = useRef<symbol | null>(null)
-  const pendingRenderRef = useRef<{ firstBlockId: string; targetId?: string } | null>(null)
-
-  const cancel = useCallback(() => {
-    requestRef.current = null
-    pendingRenderRef.current = null
-  }, [])
+}) {
+  const [position, setPosition] = useState(empty)
+  const current = useRef(position)
+  const previous = useRef<Position | null>(null)
+  const request = useRef<HistoryLocation | null>(null)
+  const handlers = useRef(callbacks)
+  handlers.current = callbacks
+  const cancel = useCallback(() => { request.current = null }, [])
   useEffect(() => cancel, [cancel])
 
-  const reset = useCallback((runtimeId: string, history: ConversationHistoryWindow) => {
-    cancel()
-    const next = { runtimeId, before: history.before, earlierEntries: history.earlierEntries }
-    positionRef.current = next
+  const replace = useCallback((next: Position) => {
+    current.current = next
     setPosition(next)
-  }, [cancel])
-
-  const loadOlder = useCallback(async (targetId?: string) => {
-    const initial = positionRef.current
-    const pendingRender = pendingRenderRef.current
-    if (targetId && pendingRender) {
-      if (!initial.earlierEntries.some(entry => entry.id === targetId)) {
-        requestRef.current = null
-        pendingRender.targetId = targetId
-        return
-      }
-      delete pendingRender.targetId
+  }, [])
+  const reset = useCallback((runtimeId: string, snapshot: ConversationHistorySnapshot, mode: 'selected' | 'preview' | 'background' = 'selected') => {
+    const active = current.current
+    const promoting = mode === 'selected' && !!active.preview && active.runtimeId === runtimeId
+    const next = {
+      runtimeId, tailBefore: snapshot.before, earlierEntries: snapshot.earlierEntries,
+      reading: promoting ? active.reading : snapshot.reading,
+      preview: mode === 'preview' ? restoreConversationSnapshot(snapshot.view) : null,
     }
-    if (initial.before === null || (!targetId && (requestRef.current || pendingRender))) return
-    const request = Symbol()
-    requestRef.current = request
-    const pages: ConversationSnapshot[] = []
-    let before: number | null = initial.before
-    let earlierEntries = initial.earlierEntries
+    if (mode === 'background') {
+      previous.current = next
+      return
+    }
+    if (!promoting) cancel()
+    if (mode === 'preview') previous.current ??= active
+    else previous.current = null
+    replace(next)
+  }, [cancel, replace])
+  const dismissPreview = useCallback(() => {
+    if (!previous.current) return
+    cancel()
+    replace(previous.current)
+    previous.current = null
+  }, [cancel, replace])
+
+  const read = useCallback(async (direction: 'older' | 'newer' | { around: string }) => {
+    const active = current.current
+    let location: HistoryLocation
+    if (typeof direction === 'object') {
+      location = { kind: 'around', id: direction.around }
+    } else {
+      if (request.current?.kind === direction || request.current?.kind === 'around') return
+      const cursor = direction === 'older'
+        ? windowStart(active)
+        : active.reading?.after
+      if (cursor == null) return
+      location = { kind: direction, cursor }
+    }
+    request.current = location
     try {
-      do {
-        const result = await window.whycode.conversationHistory({
-          runtimeId: initial.runtimeId,
-          before,
-          ...(targetId ? { targetId } : {}),
-        })
-        if (requestRef.current !== request) return
-        if (!result.ok) throw new Error(result.error)
-        const page = result.history
-        if (page.view.blocks.length === 0 || page.before === before) {
-          throw new Error('未能读取更早的消息，请稍后重试')
-        }
-        pages.push(page.view)
-        before = page.before
-        earlierEntries = page.earlierEntries
-        if (!targetId || page.view.blocks.some((block) => block.id === targetId)) break
-      } while (before)
-      const next = { runtimeId: initial.runtimeId, before, earlierEntries }
-      // 页面一经接收，后续请求就从新边界读取。只有滚动定位需要等待 DOM。
-      positionRef.current = next
-      pendingRenderRef.current = { firstBlockId: pages.at(-1)!.blocks[0]!.id, targetId }
-      startTransition(() => {
-        callbacksRef.current.prepend(pages)
-        setPosition(next)
-      })
+      const result = await window.whycode.conversationHistory({ runtimeId: active.runtimeId, location })
+      if (request.current !== location) return
+      if (!result.ok) throw new Error(result.error)
+      // 在提交当刻取锚，layout effect 在下一次滚轮输入前恢复同一段和像素偏移。
+      if (handlers.current.beforePage(location) === false) return
+      flushSync(() => replace({ ...current.current, reading: result.history }))
     } catch (error) {
-      if (requestRef.current === request) {
-        callbacksRef.current.onError(error instanceof Error ? error.message : String(error))
-      }
+      if (request.current === location) handlers.current.onError(error instanceof Error ? error.message : String(error))
     } finally {
-      if (requestRef.current === request) requestRef.current = null
+      if (request.current === location) request.current = null
     }
-  }, [])
+  }, [replace])
 
-  const completeRender = useCallback((firstBlockId: string | undefined): { targetId?: string } | null => {
-    const pending = pendingRenderRef.current
-    if (!pending) return {}
-    if (pending.firstBlockId !== firstBlockId) return null
-    pendingRenderRef.current = null
-    return { targetId: pending.targetId }
-  }, [])
-
+  const toTail = useCallback(() => {
+    cancel()
+    if (current.current.reading) flushSync(() => replace({ ...current.current, reading: undefined }))
+  }, [cancel, replace])
+  const tail = position.preview ?? live
+  const view = useMemo(() => {
+    const page = position.reading
+    if (!page) return tail
+    const history = restoreConversationSnapshot(page.view)
+    if (page.after !== null) return history
+    const prefix = (position.tailBefore ?? 0) - (page.before ?? 0)
+    return prefix > 0 ? prependConversationHistory(tail, conversationSnapshotRange(history, 0, prefix)) : tail
+  }, [position.reading, position.tailBefore, tail])
+  const trimLive = useCallback((liveView: ConversationState, displayed: ConversationState, anchor?: string) => {
+    const active = current.current
+    const tail = conversationHistorySnapshot(liveView)
+    const offset = active.tailBefore ?? 0
+    let reading = active.reading
+    if (reading?.after == null) {
+      const start = windowStart(active) ?? 0
+      const local = anchor ? conversationReadingWindow(displayed, anchor) : undefined
+      reading = local && { ...local, before: (start + (local.before ?? 0)) || null,
+        after: local.after === null ? null : start + local.after }
+    }
+    cancel()
+    replace({ ...active, tailBefore: offset + (tail.before ?? 0), reading,
+      earlierEntries: [...active.earlierEntries, ...tail.earlierEntries] })
+    return restoreConversationSnapshot(tail.view)
+  }, [cancel, replace])
   return {
-    earlierEntries: position.earlierEntries,
-    reset,
-    cancel,
-    loadOlder,
-    completeRender,
+    ...position, trimLive, tail, view, before: windowStart(position),
+    after: position.reading?.after ?? null, read, toTail, reset, dismissPreview, cancel,
   }
 }

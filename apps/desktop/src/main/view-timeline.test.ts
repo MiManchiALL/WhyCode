@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import type { RecordedViewEvent, ViewEvent } from '@whycode/core'
 import { committedViewBatch } from '../../../../packages/core/src/session/response-view.ts'
 import { applyCoreEvent, createConversationState } from '../shared/conversation-state.ts'
-import { conversationHistoryWindow } from './conversation-history.ts'
+import { conversationHistoryWindow } from '../shared/conversation-window.ts'
 import { restoreConversationSnapshot } from '../shared/conversation-history.ts'
 import { ViewTimeline, type ViewEventWriter } from './view-timeline.ts'
 
