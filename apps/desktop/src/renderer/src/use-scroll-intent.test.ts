@@ -39,6 +39,17 @@ describe('贴底滚动的用户意图', () => {
     assert.equal(page.releases, 1)
   })
 
+  it('外层已到顶或到底时仍接收对应方向的取页意图', async t => {
+    const page = await fixture(t)
+    page.scroller.scrollTop = 0
+    page.dispatch('wheel', { deltaY: -120 })
+    page.dispatch('keydown', { key: 'Home' })
+    page.scroller.scrollTop = 800
+    page.dispatch('wheel', { deltaY: 120 })
+    assert.deepEqual(page.directions, ['older', 'older', 'newer'])
+    assert.equal(page.releases, 0)
+  })
+
   it('键盘和触摸支持上翻，编辑控件、输入法和已消费的按键不解除跟随', async t => {
     const page = await fixture(t)
     page.dispatch('keydown', { key: 'PageUp' })
@@ -87,6 +98,7 @@ async function fixture(t: TestContext) {
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true })
   let now = 1_000
   t.mock.method(performance, 'now', () => now)
+  const directions: string[] = []
   let releases = 0
   let recent!: () => boolean
   let unmounted = false
@@ -101,7 +113,7 @@ async function fixture(t: TestContext) {
   })
   function Example({ enabled }: { enabled: boolean }) {
     const ref = useRef<HTMLDivElement>(null)
-    recent = useScrollIntent(ref, () => { releases++ }, enabled)
+    recent = useScrollIntent(ref, () => { releases++ }, enabled, direction => directions.push(direction))
     return createElement('div', { ref }, createElement('div', { id: 'nested' }),
       createElement('input'), createElement('button'), createElement('div', { id: 'editable', contentEditable: true }),
       createElement('div', { role: 'slider' }))
@@ -116,7 +128,7 @@ async function fixture(t: TestContext) {
     element.scrollTop = 100
   }
   return {
-    scroller, nested, render, unmount,
+    scroller, nested, render, unmount, directions,
     get releases() { return releases }, recent: () => recent(), advance: (ms: number) => { now += ms },
     dispatch(type: string, values: Record<string, unknown>, target: Element = scroller, prevented = false) {
       const event = new window.Event(type, { bubbles: true, cancelable: true })

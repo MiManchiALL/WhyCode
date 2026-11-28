@@ -15,7 +15,7 @@ import type {
   SubagentState,
   ReasoningEffortSelection,
 } from '@whycode/core'
-import type { ConversationHistoryWindow } from './conversation-history.ts'
+import type { ConversationHistorySnapshot } from './conversation-history.ts'
 import type { SkillSummary } from '@whycode/core/skills'
 import type { ToolFileChange } from '@whycode/core/events'
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -89,7 +89,7 @@ export interface RuntimeSnapshot {
   resumingSessionId: string | null
   /** 首次发送登记后即存在；恢复中的候选会话不会提前替换当前身份。 */
   sessionId: string | null
-  history: ConversationHistoryWindow
+  history: ConversationHistorySnapshot
   queuedInputs: QueuedUserMessage[]
   restoredInputs: QueuedUserMessage[]
   approval: ApprovalRequest | null

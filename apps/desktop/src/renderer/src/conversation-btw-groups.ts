@@ -27,8 +27,9 @@ export interface BtwConversationPresentation {
 export function presentBtwConversations(
   sections: readonly ConversationSection[],
   expandedIds: ReadonlySet<string>,
+  atTail = true,
 ): BtwConversationPresentation {
-  const latestBtwConversationId = latestUserBlock(sections)?.btw?.conversationId ?? null
+  const latestBtwConversationId = atTail ? latestUserBlock(sections)?.btw?.conversationId ?? null : null
   const items: ConversationDisplayItem[] = []
   const navigationTargetIds = new Map<string, string>()
 

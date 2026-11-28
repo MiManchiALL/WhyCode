@@ -31,7 +31,6 @@ export interface ConversationPresentation {
   clearedBackgroundTaskIds?: ReadonlySet<string>
   queuedMessagesCollapsed?: boolean
   scroll?: ConversationScrollPosition
-  historyStart?: string
   workspacePosition?: WorkspaceBrowserPosition
   fileChanges?: Map<string, ToolFileChange[]>
 }
@@ -51,13 +50,12 @@ export class ConversationPresentationCache {
     return value
   }
 
-  saveScroll(key: string, scroll: ConversationScrollPosition, historyStart?: string): void {
+  saveScroll(key: string, scroll: ConversationScrollPosition): void {
     const previous = this.entries.get(key)
     this.set(key, {
       ...previous,
       expandedOverrides: previous?.expandedOverrides ?? new Map(),
       scroll,
-      historyStart,
     })
   }
 

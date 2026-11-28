@@ -4,6 +4,7 @@ import {
   type CustomSystemPromptSnapshot,
   type ReasoningEffortSelection,
   type SessionJournal,
+  type SessionHistorySource,
   type WorkspaceBinding,
 } from '@whycode/core'
 import type { DesktopSessionSummary } from '../shared/session.ts'
@@ -42,13 +43,13 @@ export class DesktopSessionRepository {
   }
 
   /** 完整打开候选会话；并发请求复用同一个 Journal 实例。 */
-  prepareResume(sessionId: string): Promise<SessionJournal> {
+  prepareResume(sessionId: string, onHistory?: (source: SessionHistorySource) => Promise<void>): Promise<SessionJournal> {
     const opened = this.opened.get(sessionId)
     if (opened) return Promise.resolve(opened)
     const pending = this.pendingOpen.get(sessionId)
     if (pending) return pending
     let opening: Promise<SessionJournal>
-    opening = this.store.open(sessionId)
+    opening = this.store.open(sessionId, onHistory)
       .then((journal) => {
         this.opened.set(sessionId, journal)
         return journal

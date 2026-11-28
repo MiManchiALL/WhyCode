@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { setImmediate } from 'node:timers/promises'
 import { describe, it } from 'node:test'
-import type { CoreEvent, ViewEvent } from '@whycode/core'
-import { ConversationHistoryProjection, conversationHistoryWindow } from './conversation-history.ts'
-import { applyCoreEvent, applyViewEvent, createConversationState } from '../shared/conversation-state.ts'
-import { prependConversationHistory, restoreConversationSnapshot } from '../shared/conversation-history.ts'
+import type { ViewEvent } from '@whycode/core'
+import { ConversationHistoryProjection } from './conversation-history.ts'
+import { conversationHistorySnapshot, conversationHistoryWindow } from '../shared/conversation-window.ts'
+import { applyCoreEvent, createConversationState } from '../shared/conversation-state.ts'
+import { restoreConversationSnapshot } from '../shared/conversation-history.ts'
 import { conversationNavigationEntries } from '../shared/conversation-navigation.ts'
 import { conversationSections } from '../shared/conversation-sections.ts'
 
@@ -22,43 +23,70 @@ function work(index: number): ViewEvent[] {
 function works(count: number): ViewEvent[] { return Array.from({ length: count }, (_, i) => work(i)).flat() }
 
 describe('会话历史分页', () => {
-  it('压缩序号不受历史分页、补载和回滚影响', () => {
-    const compact = { type: 'context-compacted' as const, level: 'full' as const,
-      preTokens: 40_000, postTokens: 10_000 }
-    const full = createConversationState([
-      ...work(-1), core(compact), ...works(25), core(compact),
-    ])
-    const tail = conversationHistoryWindow(full)
-    assert.notEqual(tail.before, null)
-    let view = restoreConversationSnapshot(tail.view)
-    assert.equal(view.compactionCount, 2)
-    assert.deepEqual(view.blocks.filter(block => block.kind === 'compaction').map(block => block.index), [2])
-    view = applyCoreEvent(view, compact)
-    view = prependConversationHistory(view, conversationHistoryWindow(full, { before: tail.before! }).view)
-    assert.deepEqual(view.blocks.filter(block => block.kind === 'compaction').map(block => block.index), [1, 2, 3])
-    view = applyCoreEvent(view, { type: 'checkpoint-restored', turnId: 'turn-24', toolUseId: 'tool-24',
-      scope: 'files-and-chat', ok: true })
-    view = applyCoreEvent(view, compact)
-    assert.equal(view.compactionCount, 4)
-    const last = view.blocks.at(-1)
-    assert.equal(last?.kind === 'compaction' && last.index, 4)
-  })
-  it('首批只发最近 20 个完整工作，逐页补载与完整投影一致', () => {
-    const full = createConversationState(works(65))
-    let page = conversationHistoryWindow(full)
-    let view = restoreConversationSnapshot(structuredClone(page.view))
-    assert.equal(view.blocks.filter((block) => block.kind === 'user').length, 20)
-    assert.equal(page.earlierEntries.length, 45)
-    assert.deepEqual([
-      ...page.earlierEntries,
-      ...conversationNavigationEntries(conversationSections(view.blocks)),
-    ], conversationNavigationEntries(conversationSections(full.blocks)))
-    while (page.before !== null) {
-      page = conversationHistoryWindow(full, { before: page.before })
-      view = prependConversationHistory(view, page.view)
+  it('最近六组和轻量定位轨覆盖全部输入，向前向后读取皆有界', () => {
+    const state = createConversationState(works(65))
+    const tail = conversationHistorySnapshot(state)
+    const users = (page: typeof tail.view) => page.blocks.filter(b => b.kind === 'user')
+    assert.equal(users(tail.view).length, 6)
+    assert.deepEqual([...tail.earlierEntries, ...conversationNavigationEntries(conversationSections(tail.view.blocks))],
+      conversationNavigationEntries(conversationSections(state.blocks)))
+    let page = conversationHistoryWindow(state)
+    const seen = new Set<string>()
+    while (true) {
+      page.view.blocks.forEach(b => seen.add(b.id))
+      if (page.before === null) break
+      const older = conversationHistoryWindow(state, { kind: 'older', cursor: page.before })
+      assert.ok((older.before ?? 0) < page.before)
+      assert.ok(users(older.view).length <= 18)
+      assert.ok(older.view.blocks.some(b => b.id === page.view.blocks[0]!.id))
+      page = older
     }
-    assert.deepEqual(view, full)
-    assert.equal(new Set(view.blocks.map((block) => block.id)).size, full.blocks.length)
+    assert.equal(seen.size, state.blocks.length)
+    while (page.after !== null) {
+      const newer = conversationHistoryWindow(state, { kind: 'newer', cursor: page.after })
+      assert.ok((newer.after ?? state.blocks.length) > page.after)
+      assert.ok(users(newer.view).length <= 18)
+      assert.ok(newer.view.blocks.some(b => b.id === page.view.blocks.at(-1)!.id))
+      page = newer
+    }
+    assert.equal(page.view.blocks.at(-1), state.blocks.at(-1))
+  })
+
+  it('轨道、阅读锚点和正文段 ID 一次直达目标，窗口和实时尾部分开', () => {
+    const state = createConversationState(works(250))
+    const target = state.blocks[40]!
+    const around = conversationHistoryWindow(state, { kind: 'around', id: target.id })
+    assert.ok(around.view.blocks.includes(target))
+    assert.equal(around.view.blocks.filter(b => b.kind === 'user').length, 6)
+    assert.deepEqual(conversationHistorySnapshot(state, target.id).reading, around)
+    assert.ok(conversationHistorySnapshot(state, 'work-input-10').reading)
+    assert.equal(conversationHistorySnapshot(state, '已回滚的锚点').reading, undefined)
+    assert.throws(() => conversationHistoryWindow(state, { kind: 'around', id: '已删除' }), /定位/)
+  })
+
+  it('远处的回滚同时更新定位轨、窗口边界和最新正文', () => {
+    const state = createConversationState(works(45))
+    const restored = applyCoreEvent(state, { type: 'checkpoint-restored', toolUseId: 'tool-10',
+      turnId: 'turn-10', scope: 'files-and-chat', ok: true })
+    const history = conversationHistorySnapshot(restored)
+    assert.equal(history.earlierEntries.length, 4)
+    assert.equal(history.view.blocks.some(b => b.kind === 'user' && b.turnId === 'turn-44'), false)
+    assert.throws(() => conversationHistoryWindow(restored, { kind: 'around', id: state.blocks.at(-1)!.id }))
+  })
+
+  it('未显示的压缩和检查点仍由完整投影决定序号和有效边界', () => {
+    const compact = core({ type: 'context-compacted', level: 'full', preTokens: 40_000, postTokens: 10_000 })
+    const events = work(-1)
+    events.splice(4, 0, core({ type: 'checkpoint-created', toolUseId: 'tool--1', hash: 'hash', coverage: 'complete' }))
+    const state = createConversationState([...events, compact, ...works(25), compact, core({
+      type: 'checkpoint-restored', turnId: 'turn--1', toolUseId: 'tool--1', scope: 'files', ok: true })])
+    const tail = restoreConversationSnapshot(conversationHistoryWindow(state).view)
+    assert.deepEqual(tail.blocks.filter(b => b.kind === 'compaction').map(b => b.index), [2])
+    assert.equal(applyCoreEvent(tail, { type: 'context-compacted', level: 'full', preTokens: 20, postTokens: 10 }).compactionCount, 3)
+    const distant = conversationHistoryWindow(state, { kind: 'around', id: state.blocks[0]!.id })
+    assert.equal(distant.view.fileRollbackBoundaryTurnId, 'turn--1')
+    const tool = distant.view.blocks.find(b => b.kind === 'tool')
+    assert.equal(tool?.kind === 'tool' && tool.call.hasCheckpoint, false)
   })
 
   it('一轮中的插话、工具和连续 BTW 问答保持完整分组', () => {
@@ -72,7 +100,7 @@ describe('会话历史分页', () => {
           btw: { conversationId: 'side', turnIndex, continuationAvailable: turnIndex < 3 } }),
       )
     }
-    events.push(...works(18),
+    events.push(...works(4),
       { type: 'user-message', text: '进行中的工作', startsTurn: true },
       core({ type: 'turn-start', turnId: 'active' }),
       { type: 'user-message', inputId: 'steer', text: '增加一项核实', startsTurn: false },
@@ -85,68 +113,8 @@ describe('会话历史分页', () => {
     assert.equal(page.view.blocks.at(-1)?.kind, 'tool')
   })
 
-  it('跨页定位分批读取，恢复阅读窗口覆盖原来的第一块', () => {
-    const full = createConversationState(works(250))
-    const tail = conversationHistoryWindow(full)
-    const target = full.blocks[40]!.id
-    const first = conversationHistoryWindow(full, { before: tail.before!, targetId: target })
-    assert.equal(first.view.blocks.filter((block) => block.kind === 'user').length, 100)
-    const second = conversationHistoryWindow(full, { before: first.before!, targetId: target })
-    const third = conversationHistoryWindow(full, { before: second.before!, targetId: target })
-    assert.equal(third.view.blocks[0]!.id, target)
-    const restored = conversationHistoryWindow(full, { from: second.view.blocks[0]!.id })
-    assert.deepEqual(restored.view.blocks, full.blocks.slice(second.before!))
-  })
-
-  it('补载保留实时尾部和待提交步骤，丢弃步骤不丢失新加载的历史', () => {
-    const full = createConversationState(works(45))
-    const tail = conversationHistoryWindow(full)
-    let view = restoreConversationSnapshot(tail.view)
-    view = applyCoreEvent(view, { type: 'user-message-accepted', inputId: 'new', text: '继续', startsTurn: true })
-    view = applyCoreEvent(view, { type: 'turn-start', turnId: 'new-turn' })
-    const stableNextId = view.nextId
-    view = applyCoreEvent(view, { type: 'text-delta', text: '尚未提交' })
-    const older = conversationHistoryWindow(full, { before: tail.before! })
-    view = prependConversationHistory(view, older.view)
-    assert.equal(view.nextId, stableNextId + 1)
-    view = applyCoreEvent(view, { type: 'step-discarded' })
-    assert.equal(view.nextId, stableNextId)
-    const last = view.blocks.at(-1)
-    assert.equal(last?.kind === 'user' && last.text, '继续')
-    assert.equal(view.blocks.length, older.view.blocks.length + tail.view.blocks.length + 1)
-    assert.equal(view.turnStartBlocks.get('new-turn'), view.blocks.length - 1)
-  })
-
-  it('全局控制状态和已失效的检查点不受历史页边界影响', () => {
-    const events = works(2)
-    events.splice(4, 0, core({ type: 'checkpoint-created', toolUseId: 'tool-0', hash: 'hash', coverage: 'complete' }))
-    events.push(...works(30), core({ type: 'checkpoint-restored', turnId: 'turn-0',
-      toolUseId: 'tool-0', scope: 'files', ok: true }))
-    const full = createConversationState(events)
-    const page = conversationHistoryWindow(full)
-    assert.equal(page.view.fileRollbackBoundaryTurnId, 'turn-0')
-    const older = conversationHistoryWindow(full, { before: page.before! })
-    const restoredTool = older.view.blocks.find((block) => block.kind === 'tool' && block.call.id === 'tool-0')
-    assert.equal(restoredTool?.kind === 'tool' && restoredTool.call.hasCheckpoint, false)
-  })
-
-  it('回滚删除首个可见工作后仍可读取其前缀，不重新插入被删除的工作', () => {
-    let full = createConversationState(works(45))
-    const tail = conversationHistoryWindow(full)
-    const rollback: CoreEvent = {
-      type: 'checkpoint-restored', toolUseId: 'tool-25', turnId: 'turn-25', scope: 'files-and-chat', ok: true,
-    }
-    let view = applyCoreEvent(restoreConversationSnapshot(tail.view), rollback)
-    full = applyViewEvent(full, core(rollback))
-    assert.equal(view.blocks.length, 0)
-    const older = conversationHistoryWindow(full, { before: tail.before! })
-    view = prependConversationHistory(view, older.view)
-    assert.equal(view.blocks.filter((block) => block.kind === 'user').length, 20)
-    assert.equal(view.blocks.some((block) => block.kind === 'user' && block.turnId === 'turn-25'), false)
-  })
-
   it('短会话和空会话直接展示，没有更早页入口', () => {
-    for (const count of [0, 1, 20]) {
+    for (const count of [0, 1, 6]) {
       const state = createConversationState(works(count))
       const page = conversationHistoryWindow(state)
       assert.equal(page.before, null)

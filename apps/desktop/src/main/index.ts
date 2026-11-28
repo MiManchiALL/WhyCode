@@ -30,6 +30,8 @@ import { rm } from 'node:fs/promises'
 import { dirname, join, posix } from 'node:path'
 import {
   AgentSession,
+  readStoredImage,
+  readValidatedStoredImage,
   type BackgroundTaskState,
   BUILTIN_TOOLS,
   cleanupUnreferencedAttachments,
@@ -63,6 +65,7 @@ import {
   RUN_COMMAND_TOOL_NAME,
   USER_IMAGE_ATTACHMENT_MAX_COUNT,
   type SessionJournal,
+  type SessionHistorySource,
   SkillCatalogService,
   SubagentDefinitionCatalogService,
   skillSummary,
@@ -77,15 +80,16 @@ import {
   queuedMessageActionSchema,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
-import { conversationHistoryWindow } from './conversation-history.ts'
+import { ConversationHistoryProjection } from './conversation-history.ts'
+import { conversationHistorySnapshot, conversationHistoryWindow } from '../shared/conversation-window.ts'
 import { selectRuntimeModel, synchronizeRuntimeModelSelection } from './runtime-model-selection.ts'
 import {
   checkCheckpointFileCurrentMatch,
   readCheckpointFileChanges,
   readCheckpointFilePreview,
 } from './checkpoint-history.ts'
-import { createConversationState } from '../shared/conversation-state.ts'
-import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
+import { createConversationState, type ConversationState } from '../shared/conversation-state.ts'
+import { conversationHistoryRequestSchema, type ConversationHistoryResult } from '../shared/conversation-history.ts'
 import { compactionSummaryRequestSchema, type CompactionSummaryResult } from '../shared/compaction-summary.ts'
 import { IPC } from '../shared/ipc.ts'
 import { attachmentFallbackText } from '../shared/user-message.ts'
@@ -563,21 +567,33 @@ let skills: SkillCatalogService
 const sessionDeletionLock = new SessionDeletionLock()
 /** 恢复或 Fork 完整校验与候选运行时构造期间，只允许一个物化事务。 */
 const sessionPreparationLock = new SessionPreparationLock()
+let historyPreview: { runtimeId: string; sessionId: string; state: ConversationState; source: SessionHistorySource } | null = null
 const sessionNavigation = new SessionNavigation({
   find: (sessionId) => runtimeRegistry.findBySessionId(sessionId),
   prepare: async (sessionId) => {
     const release = sessionPreparationLock.acquire(sessionId)
     if (!release) throw new Error(sessionPreparationInProgressMessage('恢复会话'))
     try {
-      const runtime = await prepareResumedRuntime(sessionId)
+      const history = new ConversationHistoryProjection()
+      const runtimeId = randomUUID()
+      const runtime = await prepareResumedRuntime(sessionId, { runtimeId, history, async onHistory(source) {
+        if (sessionNavigation.sessionId !== sessionId) return
+        const state = await history.update(source.events, source.timestamps)
+        if (sessionNavigation.sessionId !== sessionId) return
+        historyPreview = { runtimeId, sessionId, state, source }
+        broadcastToWindows(IPC.conversationPreview, {
+          runtimeId, sessionId, history: conversationHistorySnapshot(state, sessionNavigation.historyAnchor),
+        }, '会话预览发送失败')
+      } })
       runtimeRegistry.add(runtime)
       runtimeRegistry.runtimeBecameIdle(runtime)
     } finally {
+      historyPreview = null
       release()
       nudgeNotificationQueues()
     }
   },
-  snapshot: (runtime, historyStart) => runtimeSnapshot(runtime, historyStart),
+  snapshot: (runtime, historyAnchor) => runtimeSnapshot(runtime, historyAnchor),
   commit: (runtime) => {
     const previous = runtimeRegistry.select(runtime)
     if (previous && previous !== runtime) {
@@ -2180,7 +2196,7 @@ function rejectUserMessage(
 
 async function runtimeSnapshot(
   runtime: DesktopSessionRuntime = selectedRuntime(),
-  historyStart?: string,
+  historyAnchor?: string,
 ): Promise<RuntimeSnapshot> {
   const journal = runtime.journal
   const resumingSessionId = sessionNavigation.sessionId
@@ -2218,7 +2234,7 @@ async function runtimeSnapshot(
       : null,
     resumingSessionId,
     sessionId: runtime.sessionId,
-    history: conversationHistoryWindow(timeline.state, { from: historyStart }),
+    history: conversationHistorySnapshot(timeline.state, historyAnchor),
     queuedInputs: journal ? pendingInputs(journal, 'queued', runtime.session?.questionAnswerTurnId) : [],
     restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
     approval: runtime.approval,
@@ -2301,7 +2317,7 @@ async function prepareNewSession(request?: NewSessionRequest): Promise<NewSessio
   }
 }
 
-async function resumeSession(sessionId: string, historyStart?: string): Promise<ResumeSessionResult> {
+async function resumeSession(sessionId: string, historyAnchor?: string): Promise<ResumeSessionResult> {
   if (settingsMutationInProgress) return { ok: false, error: '连接设置正在保存，请完成后再恢复会话' }
   if (sessionDeletionLock.blocksSession(sessionId) || sessionPreparationLock.kind === 'fork') {
     return {
@@ -2311,7 +2327,7 @@ async function resumeSession(sessionId: string, historyStart?: string): Promise<
         : sessionPreparationInProgressMessage('恢复其它会话'),
     }
   }
-  return sessionNavigation.resume(sessionId, historyStart)
+  return sessionNavigation.resume(sessionId, historyAnchor)
 }
 
 async function forkSession(value: unknown): Promise<ForkSessionResult> {
@@ -2423,7 +2439,11 @@ function parseForkSessionRequest(value: unknown): ForkSessionRequest {
   }
 }
 
-async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionRuntime> {
+async function prepareResumedRuntime(sessionId: string, preview?: {
+  runtimeId: string
+  history: ConversationHistoryProjection
+  onHistory: (source: SessionHistorySource) => Promise<void>
+}): Promise<DesktopSessionRuntime> {
   const preparation = await sessions.preparations.read(sessionId)
   if (preparation) {
     const workspace = await restoreSubmittedWorkspace(sessionId, preparation.workspace,
@@ -2441,13 +2461,14 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
     runtime.consensusEnabled = runtime.workspace.mode === 'ssh' ? false : preferredConsensusEnabled
     return runtime
   }
-  const journal = await sessions.prepareResume(sessionId)
+  const journal = await sessions.prepareResume(sessionId, preview?.onHistory)
   await journal.recoverInterruptedWork()
-  return prepareRuntimeFromJournal(journal)
+  return prepareRuntimeFromJournal(journal, preview)
 }
 
 async function prepareRuntimeFromJournal(
   journal: SessionJournal,
+  preview?: { runtimeId: string; history: ConversationHistoryProjection },
 ): Promise<DesktopSessionRuntime> {
   const metadata = journal.metadataSnapshot
   const resolved = resolveModelConnection(loadDisplayConfig(), metadata.modelId)
@@ -2458,6 +2479,8 @@ async function prepareRuntimeFromJournal(
       )
     : metadata.reasoningEffort
   const runtime = new DesktopSessionRuntime({
+    runtimeId: preview?.runtimeId,
+    history: preview?.history,
     workspace: metadata.workspace,
     modelId: metadata.modelId,
     reasoningEffort: targetReasoningEffort,
@@ -2966,14 +2989,19 @@ if (primaryInstance) void app.whenReady().then(async () => {
   runtimeRegistry.select(initialRuntime)
   await syncRetiredModelLabels()
     .catch((error) => logHostIssue('warn', '历史模型显示名同步失败：', error))
-  registerAttachmentProtocol(async (sessionId) => {
+  registerAttachmentProtocol(async (sessionId, storageName) => {
     const journal = runtimeRegistry.findBySessionId(sessionId)?.journal
-    if (journal) return journal.attachmentDirectory
+    if (journal) return readStoredImage(journal.attachmentDirectory, storageName)
+    if (historyPreview?.sessionId === sessionId && sessionNavigation.sessionId === sessionId) {
+      const { source } = historyPreview
+      const image = source.images.find(item => item.sessionId === sessionId && item.storageName === storageName)
+      return image ? readValidatedStoredImage(source.attachmentDirectory, image) : null
+    }
     for (const runtime of runtimeRegistry.all()) {
       if (!runtime.journal) continue
       const directory = await subagents.attachmentDirectory(runtime.journal.sessionId, sessionId)
         .catch(() => null)
-      if (directory) return directory
+      if (directory) return readStoredImage(directory, storageName)
     }
     return null
   })
@@ -3113,18 +3141,22 @@ if (primaryInstance) void app.whenReady().then(async () => {
     if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) return { ok: false, error: '仅主页面可编辑 MCP 配置' }
     return mutateConnectionSettings(() => sshMcpProjects.save(remoteMcpSaveSchema.parse(value)), currentMcpSettingsSnapshot)
   })
-  ipcMain.handle(IPC.conversationHistory, async (_e, request: ConversationHistoryRequest): Promise<ConversationHistoryResult> => {
+  ipcMain.handle(IPC.conversationHistory, async (_e, value: unknown): Promise<ConversationHistoryResult> => {
     try {
+      const request = conversationHistoryRequestSchema.parse(value)
+      if (historyPreview?.runtimeId === request.runtimeId && sessionNavigation.sessionId === historyPreview.sessionId) {
+        return { ok: true, history: conversationHistoryWindow(historyPreview.state, request.location) }
+      }
       const runtime = runtimeForId(request.runtimeId)
       if (!runtime.journal) throw new Error('当前会话没有更早历史')
       const { state } = await runtime.timeline.conversationAt(runtime.journal, readRuntimeEventBoundary)
-      return { ok: true, history: conversationHistoryWindow(state, request) }
+      return { ok: true, history: conversationHistoryWindow(state, request.location) }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
-  ipcMain.handle(IPC.runtimeSnapshot, (_e, runtimeId?: string) =>
-    runtimeSnapshot(runtimeForId(runtimeId)))
+  ipcMain.handle(IPC.runtimeSnapshot, (_e, runtimeId?: string, anchor?: string) =>
+    runtimeSnapshot(runtimeForId(runtimeId), anchor))
   ipcMain.handle(IPC.compactionSummary, async (_e, value: unknown): Promise<CompactionSummaryResult> => {
     try {
       const request = compactionSummaryRequestSchema.parse(value)
@@ -3232,7 +3264,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       }
     }
   })
-  ipcMain.handle(IPC.resumeSession, (_e, sessionId: string, historyStart?: string) => resumeSession(sessionId, historyStart))
+  ipcMain.handle(IPC.resumeSession, (_e, sessionId: string, historyAnchor?: string) => resumeSession(sessionId, historyAnchor))
   ipcMain.handle(IPC.renameSession, async (event, request: RenameSessionRequest): Promise<RenameSessionResult> => {
     if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {
       return { ok: false, error: '仅主页面可重命名会话' }

@@ -13,7 +13,7 @@ import type {
   SubagentState,
   SubagentTranscriptSnapshot,
 } from '@whycode/core'
-import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
+import type { ConversationHistoryRequest, ConversationHistoryResult, ConversationPreview } from '../shared/conversation-history.ts'
 import type { CompactionSummaryRequest, CompactionSummaryResult } from '../shared/compaction-summary.ts'
 import { IPC } from '../shared/ipc.ts'
 import type { DiagnosticState, RendererDiagnostic } from '../shared/diagnostics.ts'
@@ -247,12 +247,17 @@ const api = {
   ): Promise<SettingsMutationResult<McpSettingsItem>> => ipcRenderer.invoke(IPC.saveRemoteMcpConfig, request),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  onConversationPreview: (callback: (preview: ConversationPreview) => void) => {
+    const listener = (_event: IpcRendererEvent, preview: ConversationPreview) => callback(preview)
+    ipcRenderer.on(IPC.conversationPreview, listener)
+    return () => { ipcRenderer.off(IPC.conversationPreview, listener) }
+  },
   conversationHistory: (request: ConversationHistoryRequest): Promise<ConversationHistoryResult> =>
     ipcRenderer.invoke(IPC.conversationHistory, request),
   compactionSummary: (request: CompactionSummaryRequest): Promise<CompactionSummaryResult> =>
     ipcRenderer.invoke(IPC.compactionSummary, request),
-  runtimeSnapshot: (runtimeId?: string): Promise<RuntimeSnapshot> =>
-    ipcRenderer.invoke(IPC.runtimeSnapshot, runtimeId),
+  runtimeSnapshot: (runtimeId?: string, anchor?: string): Promise<RuntimeSnapshot> =>
+    ipcRenderer.invoke(IPC.runtimeSnapshot, runtimeId, anchor),
   subagentTranscript: (
     parentSessionId: string,
     subagentId: string,
@@ -330,8 +335,8 @@ const api = {
   listSessionSidebar: (): Promise<SessionSidebarSnapshot> => ipcRenderer.invoke(IPC.listSessionSidebar),
   renameProject: (id: string, name: string): Promise<WorkspaceActionResult> => ipcRenderer.invoke(IPC.renameProject, id, name),
   removeProject: (id: string): Promise<WorkspaceActionResult> => ipcRenderer.invoke(IPC.removeProject, id),
-  resumeSession: (sessionId: string, historyStart?: string): Promise<ResumeSessionResult> =>
-    ipcRenderer.invoke(IPC.resumeSession, sessionId, historyStart),
+  resumeSession: (sessionId: string, historyAnchor?: string): Promise<ResumeSessionResult> =>
+    ipcRenderer.invoke(IPC.resumeSession, sessionId, historyAnchor),
   forkSession: (request: ForkSessionRequest): Promise<ForkSessionResult> =>
     ipcRenderer.invoke(IPC.forkSession, request),
   newSession: (request?: NewSessionRequest): Promise<NewSessionResult> =>

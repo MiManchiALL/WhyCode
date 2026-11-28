@@ -599,10 +599,10 @@ canonical 消息的 `whycode` 元数据保存正式用户 turn 身份及有界�
 
 桌面契约单源：`apps/desktop/src/shared/conversation-history.ts` 与 `session.ts`。
 
-- `RuntimeSnapshot.history` 携带最近窗口的可序列化视图、`before` 游标与更早输入的导航摘要；活动控制状态仍是当前运行时状态，`eventSequence` 与投影处于同一同步边界，随后只消费边界之后的实时事件。
-- `conversationHistory({runtimeId,before,targetId?})` 只读取指定运行时的可见历史；`before` 表示已加载窗口前的块数，返回其之前的完整工作分组。普通读取约 20 组，定位读取每批最多 100 组；连续 BTW 链按一组计算。没有更早内容时 `before=null`。
-- `resumeSession(sessionId,historyStart?)` 可传此前阅读窗口的块身份以恢复已加载范围；正文、工具结果和任务状态不作为 Renderer 本地缓存落盘。Main 从恢复请求成立起投递目标会话的完整实时事件，覆盖读取快照到提交选择的间隙；Renderer 按快照游标接续，不能漏掉工具封口或步骤提交。未选中且未在恢复的会话只投递生命周期事件。
-- 更早页只扩展显示前缀，不覆盖实时控制状态、当前输出或步骤提交/丢弃边界；分页不生成模型消息、不改变持久化 schema，也不取代模型的完整上下文恢复。
+- `RuntimeSnapshot.history` 携带实时尾部、更早输入的导航摘要，以及可选的阅读锚点窗口。`eventSequence` 与实时投影处于同一同步边界，Renderer 从该游标接续实时事件。
+- `conversationHistory({runtimeId,location})` 读取完整工作分组。`older` 和 `newer` 分别使用 `before` 和 `after` 指向的块边界。到达对应端点时游标为空。`around` 按消息或段落 ID 直接读取附近窗口。
+- `resumeSession(sessionId,anchor?)` 可传此前阅读的块或段落 ID。冷打开时 `conversationPreview` 先交付候选运行时的只读历史，附件与执行环境验证成功后才提交选择。Main 从恢复请求成立起投递目标会话的完整实时事件，覆盖读取快照到提交选择的间隙；Renderer 按快照游标接续，不能漏掉工具封口或步骤提交。未选中且未在恢复的会话只投递生命周期事件。
+- Renderer 分开持有浏览窗口和实时尾部。执行、编辑与步骤丢弃使用实时状态。历史改写后按新的权威投影重建游标与定位轨。分页只作用于展示。
 - `compactionSummary({runtimeId,index})` 校验运行时身份与正整数序号，待时间线写稳后，只返回该会话第 `index` 次完整压缩的历史摘要、turn 前缀摘要、时间和前后 token 数。微压缩不计数；没有对应成功记录或摘要时明确报错。摘要不含原始保留尾部和应用重注入内容，不改写会话或重新调用模型；类型单源为 `shared/compaction-summary.ts`。
 
 ### 7.2 未发送输入草稿

@@ -558,6 +558,23 @@ describe('SessionStore', () => {
     assert.equal(recovered.initialMessages.some((entry) => modelText(entry) === '崩溃前插话'), false)
   })
 
+  it('先交付只读时间线，附件损坏仍会阻止打开可写 Journal', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    const id = randomUUID()
+    const attachment: ImageAttachment = { id, sessionId: journal.sessionId, name: 'missing.png',
+      storageName: `${id}.png`, mediaType: 'image/png', sha256: 'a'.repeat(64), byteLength: 100, width: 10, height: 10 }
+    await journal.recordUserInputWithId(randomUUID(), '查看附件', true, [attachment])
+    let previewRead = false
+    await assert.rejects(store.open(journal.sessionId, async source => {
+      assert.equal(source.events.length, source.timestamps.length)
+      assert.ok(source.events.some(event => event.type === 'user-message' && event.text === '查看附件'))
+      assert.deepEqual(source.images, [attachment])
+      previewRead = true
+    }), /ENOENT|附件文件/)
+    assert.equal(previewRead, true)
+  })
+
   it('附件元数据冲突在 JSONL 追加前失败', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })

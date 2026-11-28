@@ -2,16 +2,14 @@ import assert from 'node:assert/strict'
 import { it, type TestContext } from 'node:test'
 import type { ViewEvent } from '@whycode/core'
 import { parseHTML } from 'linkedom'
-import { act, createElement, useLayoutEffect, useState } from 'react'
+import { act, createElement, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { conversationHistoryWindow } from '../../main/conversation-history.ts'
+import { conversationHistorySnapshot, conversationHistoryWindow } from '../../shared/conversation-window.ts'
 import {
-  prependConversationHistory, restoreConversationSnapshot,
-  type ConversationHistoryRequest, type ConversationHistoryResult, type ConversationHistoryWindow,
+  restoreConversationSnapshot,
+  type ConversationHistoryRequest, type ConversationHistoryResult, type ConversationHistorySnapshot,
 } from '../../shared/conversation-history.ts'
-import { conversationNavigationEntries } from '../../shared/conversation-navigation.ts'
-import { conversationSections } from '../../shared/conversation-sections.ts'
-import { createConversationState, type ConversationState } from '../../shared/conversation-state.ts'
+import { applyCoreEvent, createConversationState } from '../../shared/conversation-state.ts'
 import { useConversationHistory } from './use-conversation-history.ts'
 
 const events: ViewEvent[] = Array.from({ length: 50 }, (_, index): ViewEvent[] => [
@@ -20,66 +18,115 @@ const events: ViewEvent[] = Array.from({ length: 50 }, (_, index): ViewEvent[] =
   { type: 'core-event', event: { type: 'work-finished', durationMs: 100, outcome: 'completed', forkTurnId: null } },
 ]).flat()
 const full = createConversationState(events)
-const tail = conversationHistoryWindow(full)
-const firstPage = conversationHistoryWindow(full, { before: tail.before! })
+const tail = conversationHistorySnapshot(full)
 
-it('滚动补页与定位发生在同一次绘制前时，正文和定位轨都只接收一次历史', async t => {
+it('连续上翻和下翻替换远端页，实时尾部能直接返回', async t => {
   const page = await fixture(t)
-  const target = full.blocks[0]!.id
-  await act(async () => {
-    await page.history.loadOlder()
-    await page.history.loadOlder(target)
-  })
-  assert.deepEqual(page.requests.map(request => request.before), [tail.before, firstPage.before])
-  assert.deepEqual(page.view.blocks, full.blocks)
-  const markers = [...page.history.earlierEntries, ...conversationNavigationEntries(conversationSections(page.view.blocks))]
-  assert.deepEqual(markers, conversationNavigationEntries(conversationSections(full.blocks)))
-  assert.deepEqual(page.targets, [target])
+  for (let i = 0; i < 5; i++) await act(async () => { await page.history.read('older') })
+  assert.ok(page.requests.every(r => r.location.kind === 'older'))
+  assert.ok(page.history.after !== null)
+  assert.ok(page.view.blocks.filter(block => block.kind === 'user').length <= 18)
+  assert.ok(!page.view.blocks.includes(full.blocks.at(-1)!))
+  await act(async () => { await page.history.read('newer') })
+  assert.equal(page.requests.at(-1)?.location.kind, 'newer')
+  await act(async () => { page.history.toTail() })
+  assert.deepEqual(page.view.blocks, tail.view.blocks)
 })
 
-it('定位到已接收但尚未绘制的页时复用该页，绘制后只跳转到最后选择的目标', async t => {
-  const oldest = full.blocks[0]!.id
-  let release!: () => void
-  const delayed = new Promise<void>(resolve => { release = resolve })
-  const page = await fixture(t, async request => {
-    if (request.targetId === oldest) await delayed
-    return readPage(request)
-  })
-  const [first, second] = firstPage.view.blocks.filter(block => block.kind === 'user')
-  await act(async () => {
-    await page.history.loadOlder()
-    const older = page.history.loadOlder(oldest)
-    await page.history.loadOlder(first!.id)
-    await page.history.loadOlder(second!.id)
-    release()
-    await older
-  })
-  assert.deepEqual(page.requests.map(request => request.targetId), [undefined, oldest])
-  assert.equal(page.view.blocks[0]!.id, firstPage.view.blocks[0]!.id)
-  assert.deepEqual(page.targets, [second!.id])
-})
-
-it('切到新会话后，上一会话已接收的页和迟到的读取结果都不能带入新会话', async t => {
+it('最新定位胜过迟到的滚动或另一次跳转，只请求目标窗口', async t => {
   let deliver!: (result: ConversationHistoryResult) => void
   const delayed = new Promise<ConversationHistoryResult>(resolve => { deliver = resolve })
-  const page = await fixture(t, request => request.targetId ? delayed : readPage(request))
-  let pending!: Promise<void>
+  const target = full.blocks[4]!.id
+  const page = await fixture(t, r => r.location.kind === 'older' ? delayed : readPage(r))
   await act(async () => {
-    await page.history.loadOlder()
-    pending = page.history.loadOlder(full.blocks[0]!.id)
-    page.reset('new', conversationHistoryWindow(createConversationState()))
+    const older = page.history.read('older')
+    await page.history.read({ around: target })
+    deliver(readPage(page.requests[0]!))
+    await older
   })
+  assert.equal(page.requests.length, 2)
+  assert.deepEqual(page.targets, [target])
+  assert.ok(page.view.blocks.some(b => b.id === target))
+  assert.equal(page.view.blocks.filter(b => b.kind === 'user').length, 6)
+})
+
+it('补载期间来的实时步骤和丢弃边界保持在尾部，阅读早期历史时也能接续', async t => {
+  const page = await fixture(t)
+  await act(async () => { await page.history.read('older') })
+  await act(async () => { page.stream({ type: 'text-delta', text: '草稿' }) })
+  assert.equal(page.view.blocks.at(-1)?.kind, 'text')
+  await act(async () => { page.stream({ type: 'step-discarded' }) })
+  assert.equal(page.view.blocks.at(-1)?.kind, 'work-duration')
+  await act(async () => { await page.history.read({ around: full.blocks[0]!.id }) })
+  await act(async () => { page.stream({ type: 'user-message-accepted', inputId: 'live', text: '新问题', startsTurn: true }) })
+  assert.equal(page.view.blocks.some(b => b.kind === 'user' && b.inputId === 'live'), false)
+  await act(async () => { page.history.toTail() })
+  const last = page.view.blocks.at(-1)
+  assert.equal(last?.kind === 'user' && last.text, '新问题')
+})
+
+it('只读预览移交后保留正在读的窗口，预览被撤销时恢复原会话', async t => {
+  const page = await fixture(t)
+  await act(async () => { page.history.reset('preview', tail, 'preview') })
+  await act(async () => { await page.history.read({ around: full.blocks[0]!.id }) })
+  const first = page.view.blocks[0]!.id
+  await act(async () => { page.history.reset('preview', tail) })
+  assert.equal(page.view.blocks[0]!.id, first)
+  await act(async () => { page.history.reset('other', conversationHistorySnapshot(createConversationState()), 'preview') })
+  await act(async () => { page.history.dismissPreview() })
+  assert.equal(page.history.runtimeId, 'preview')
+  assert.equal(page.view.blocks[0]!.id, first)
+  await act(async () => { page.history.reset('new', tail, 'preview') })
+  await act(async () => { page.history.reset('original', tail, 'background') })
+  assert.equal(page.history.runtimeId, 'new')
+  await act(async () => { page.history.dismissPreview() })
+  assert.equal(page.history.runtimeId, 'original')
+})
+
+it('完整恢复期间发起的定位在同一运行时完成时仍然生效', async t => {
+  let deliver!: (result: ConversationHistoryResult) => void
+  const delayed = new Promise<ConversationHistoryResult>(resolve => { deliver = resolve })
+  const page = await fixture(t, () => delayed)
+  await act(async () => { page.history.reset('candidate', tail, 'preview') })
   await act(async () => {
-    deliver(readPage(page.requests[1]!))
+    const pending = page.history.read({ around: full.blocks[0]!.id })
+    page.history.reset('candidate', tail)
+    deliver(readPage(page.requests[0]!))
+    await pending
+  })
+  assert.equal(page.history.preview, null)
+  assert.equal(page.view.blocks[0]!.id, full.blocks[0]!.id)
+})
+
+it('同一会话持续增长时释放较早尾部，保留全部导航项及当前锚点', async t => {
+  const page = await fixture(t)
+  const grown = createConversationState(events.slice(0, 39))
+  const initial = conversationHistorySnapshot(createConversationState())
+  await act(async () => { page.reset('growing', { ...initial, view: { ...grown, expanded: [], turnStartBlocks: [] } }) })
+  await act(async () => { page.trim(grown.blocks[0]!.id) })
+  assert.equal(page.view.blocks[0]!.id, grown.blocks[0]!.id)
+  assert.equal(page.history.tail.blocks.filter(b => b.kind === 'user').length, 6)
+  assert.equal(page.history.earlierEntries.length, 7)
+  assert.ok(page.history.after !== null)
+  await act(async () => { page.history.toTail() })
+  assert.equal(page.view.blocks.at(-1)!.id, grown.blocks.at(-1)!.id)
+})
+
+it('切走后迟到的页不能改变已选会话', async t => {
+  let deliver!: (result: ConversationHistoryResult) => void
+  const delayed = new Promise<ConversationHistoryResult>(resolve => { deliver = resolve })
+  const page = await fixture(t, () => delayed)
+  await act(async () => {
+    const pending = page.history.read('older')
+    page.reset('other', conversationHistorySnapshot(createConversationState()))
+    deliver(readPage(page.requests[0]!))
     await pending
   })
   assert.deepEqual(page.view.blocks, [])
-  assert.deepEqual(page.history.earlierEntries, [])
-  assert.deepEqual(page.targets, [])
 })
 
 function readPage(request: ConversationHistoryRequest): ConversationHistoryResult {
-  return { ok: true, history: conversationHistoryWindow(full, request) }
+  return { ok: true, history: conversationHistoryWindow(full, request.location) }
 }
 
 async function fixture(
@@ -104,23 +151,21 @@ async function fixture(
     },
   })
   let history!: ReturnType<typeof useConversationHistory>
-  let view!: ConversationState
-  let reset!: (runtimeId: string, snapshot: ConversationHistoryWindow) => void
+  let reset!: (id: string, snapshot: ConversationHistorySnapshot) => void
+  let trim!: (anchor: string) => void
+  let stream!: (event: Parameters<typeof applyCoreEvent>[1]) => void
   function Conversation() {
-    const [current, setView] = useState(() => restoreConversationSnapshot(tail.view))
-    view = current
-    history = useConversationHistory({
-      prepend: pages => setView(previous => pages.reduce(prependConversationHistory, previous)),
+    const [live, setLive] = useState(() => restoreConversationSnapshot(tail.view))
+    history = useConversationHistory(live, {
+      beforePage: location => { if (location.kind === 'around') targets.push(location.id) },
       onError: message => assert.fail(message),
     })
-    reset = (runtimeId, snapshot) => {
-      history.reset(runtimeId, snapshot)
-      setView(restoreConversationSnapshot(snapshot.view))
+    reset = (id, snapshot) => {
+      history.reset(id, snapshot)
+      setLive(restoreConversationSnapshot(snapshot.view))
     }
-    useLayoutEffect(() => {
-      const target = history.completeRender(current.blocks[0]?.id)?.targetId
-      if (target) targets.push(target)
-    }, [current])
+    trim = anchor => setLive(history.trimLive(live, history.view, anchor))
+    stream = event => setLive(current => applyCoreEvent(current, event))
     return null
   }
   const root = createRoot(document.body)
@@ -134,5 +179,5 @@ async function fixture(
   })
   await act(() => root.render(createElement(Conversation)))
   await act(() => reset('long', tail))
-  return { get history() { return history }, get view() { return view }, requests, targets, reset }
+  return { get history() { return history }, get view() { return history.view }, requests, targets, reset, stream, trim: (anchor: string) => trim(anchor) }
 }

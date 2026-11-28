@@ -2,6 +2,7 @@ import {
   captureScrollPosition,
   restoredAnchorScrollTop,
   restoredScrollTop,
+  type ScrollMetrics,
   type ConversationScrollAnchor,
   type ConversationScrollPosition,
 } from './conversation-presentation.ts'
@@ -26,10 +27,17 @@ interface ConversationScrollRestoration extends ConversationScrollRetention {
   position: ConversationScrollPosition
 }
 
+export function nearHistoryEdge(scroller: ScrollMetrics, direction: 'older' | 'newer'): boolean {
+  const distance = direction === 'older' ? scroller.scrollTop : scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop
+  return distance <= 2 * scroller.clientHeight
+}
+
 export function captureConversationScrollPosition(
   scroller: HTMLElement,
+  atBottom?: boolean,
 ): ConversationScrollPosition {
   const position = captureScrollPosition(scroller)
+  if (atBottom !== undefined) position.atBottom = atBottom
   if (position.atBottom) return position
   const anchor = captureConversationScrollAnchor(scroller)
   return anchor ? { ...position, anchor } : position

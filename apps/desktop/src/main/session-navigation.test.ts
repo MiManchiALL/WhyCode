@@ -17,7 +17,7 @@ function fixture() {
   const commits: string[] = []
   const prepared: string[] = []
   const settled: (string | null)[] = []
-  let readSnapshot = async (runtime: DesktopSessionRuntime, _historyStart?: string) => ({
+  let readSnapshot = async (runtime: DesktopSessionRuntime, _historyAnchor?: string) => ({
     runtimeId: runtime.runtimeId, sessionId: runtime.sessionId,
   }) as RuntimeSnapshot
   const add = (id: string) => {
@@ -35,7 +35,7 @@ function fixture() {
       await load.promise
       add(id)
     },
-    snapshot: (runtime, historyStart) => readSnapshot(runtime, historyStart),
+    snapshot: (runtime, historyAnchor) => readSnapshot(runtime, historyAnchor),
     commit: (runtime) => { commits.push(runtime.runtimeId) },
     settled: (runtime) => { settled.push(runtime?.runtimeId ?? null) },
   })
@@ -49,11 +49,11 @@ function fixture() {
 async function drain() { for (let i = 0; i < 12; i++) await Promise.resolve() }
 
 describe('SessionNavigation', () => {
-  it('恢复会话传递已加载历史起点，与旧请求保持隔离', async () => {
+  it('恢复会话传递阅读锚点，与旧请求保持隔离', async () => {
     const f = fixture()
     const starts: (string | undefined)[] = []
-    f.snapshot(async (runtime, historyStart) => {
-      starts.push(historyStart)
+    f.snapshot(async (runtime, historyAnchor) => {
+      starts.push(historyAnchor)
       return { runtimeId: runtime.runtimeId, sessionId: runtime.sessionId } as RuntimeSnapshot
     })
     assert.equal((await f.navigation.resume('a', 'b80')).ok, true)

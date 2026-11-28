@@ -25,10 +25,12 @@ import type {
 } from '../shared/workspace.ts'
 import { UserMessageRoutingGate } from './user-message-routing.ts'
 import type { RuntimeCommandResult } from '../shared/session.ts'
+import type { ConversationHistoryProjection } from './conversation-history.ts'
 import { ViewTimeline } from './view-timeline.ts'
 
 export interface DesktopSessionRuntimeOptions {
   runtimeId?: string
+  history?: ConversationHistoryProjection
   workspace: RuntimeWorkspace
   modelId: string | null
   reasoningEffort?: ReasoningEffortSelection
@@ -93,7 +95,7 @@ export class DesktopSessionRuntime {
         }`,
         recoverable: true,
       }, false)
-    })
+    }, options.history)
   }
 
   get sessionId(): string | null {

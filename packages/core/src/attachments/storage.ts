@@ -219,14 +219,11 @@ export async function validateStoredImageAttachments(
     if (!previous) unique.set(attachment.storageName, { serialized, attachment })
   }
   for (const { attachment } of unique.values()) {
-    await validateStoredImageAttachment(attachmentDirectory, attachment)
+    await readValidatedStoredImage(attachmentDirectory, attachment)
   }
 }
 
-async function validateStoredImageAttachment(
-  attachmentDirectory: string,
-  attachment: ImageAttachment,
-): Promise<void> {
+export async function readValidatedStoredImage(attachmentDirectory: string, attachment: ImageAttachment) {
   const parsed = imageAttachmentSchema.parse(attachment)
   const stored = await readStoredImage(attachmentDirectory, parsed.storageName)
   await validateImageDecodes(stored.bytes, stored)
@@ -239,6 +236,7 @@ async function validateStoredImageAttachment(
   ) {
     throw new Error(`图片附件元数据与磁盘文件不一致：${parsed.storageName}`)
   }
+  return stored
 }
 
 function throwIfImageImportAborted(abortSignal: AbortSignal | undefined): void {

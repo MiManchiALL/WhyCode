@@ -4,14 +4,14 @@ import type { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 interface SessionNavigationOptions {
   find: (sessionId: string) => DesktopSessionRuntime | null
   prepare: (sessionId: string) => Promise<void>
-  snapshot: (runtime: DesktopSessionRuntime, historyStart?: string) => Promise<RuntimeSnapshot>
+  snapshot: (runtime: DesktopSessionRuntime, historyAnchor?: string) => Promise<RuntimeSnapshot>
   commit: (runtime: DesktopSessionRuntime) => void
   settled: (runtime: DesktopSessionRuntime | null) => void
 }
 
 /** 冷加载单飞，等待目标只取最新点击；已加载的运行时不必等待冷加载。 */
 export class SessionNavigation {
-  private current: { sessionId: string } | null = null
+  private current: { sessionId: string; historyAnchor?: string } | null = null
   private preparing: Promise<void> | null = null
   private readonly options: SessionNavigationOptions
 
@@ -23,8 +23,10 @@ export class SessionNavigation {
     return this.current?.sessionId ?? null
   }
 
-  async resume(sessionId: string, historyStart?: string): Promise<ResumeSessionResult> {
-    const request = { sessionId }
+  get historyAnchor(): string | undefined { return this.current?.historyAnchor }
+
+  async resume(sessionId: string, historyAnchor?: string): Promise<ResumeSessionResult> {
+    const request = { sessionId, historyAnchor }
     this.current = request
     let runtime: DesktopSessionRuntime | null = null
     try {
@@ -45,7 +47,7 @@ export class SessionNavigation {
         }
       }
       if (this.current !== request || !runtime) return superseded()
-      const snapshot = await this.options.snapshot(runtime, historyStart)
+      const snapshot = await this.options.snapshot(runtime, historyAnchor)
       if (this.current !== request) return superseded()
       // 快照成功后同步提交；旧请求既不能选择会话，也不能回滚新选择。
       this.options.commit(runtime)
