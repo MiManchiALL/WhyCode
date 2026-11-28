@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { readStoredImage } from '@whycode/core'
 import { app, BrowserWindow, session } from 'electron'
 import { registerAttachmentProtocol, registerFileSchemes } from '../image-protocol.ts'
 
@@ -211,7 +212,8 @@ async function checkDragging(win) {
 }
 
 app.whenReady().then(async () => {
-  registerAttachmentProtocol(async id => id === sessionId ? directory : null)
+  registerAttachmentProtocol(async (id, requestedName) =>
+    id === sessionId ? readStoredImage(directory, requestedName) : null)
   assert.equal(session.fromPartition('persist:whycode-browser').protocol.isProtocolHandled('whycode-attachment'), false)
   const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: false } })
   win.setOpacity(0.01); win.setSkipTaskbar(true); win.setIgnoreMouseEvents(true); win.showInactive()
